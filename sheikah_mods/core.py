@@ -13,7 +13,7 @@ from urllib.parse import urljoin, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 NAME = "Sheikah Mods"
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 MANIFEST_URL = "https://att.aservertown.fans/manifest.json"
 HOST = "att.aservertown.fans"
 STATE_DIR = "SheikahMods"

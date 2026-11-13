@@ -1,7 +1,7 @@
 # Sheikah Mods
 
 A standalone TavernLauncher addon for installing and updating the Sheikah Sanctuary client mods.
-Version **1.2.0**. It runs independently of the Modpacks addon.
+Version **1.2.1**. It runs independently of the Modpacks addon.
 Its windows use TavernLauncher's original color scheme and shared theme controls.
 
 Version 1.2.0 adds next-launch status, a smart action button, live progress, and friendly recovery controls.

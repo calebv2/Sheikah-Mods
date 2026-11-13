@@ -1,3 +1,7 @@
+# Sheikah Mods v1.2.1
+
+- Change the addon author credit to **Sheikah**.
+
 # Sheikah Mods v1.2.0
 
 Standalone TavernLauncher addon for the Sheikah Sanctuary client mod list:
