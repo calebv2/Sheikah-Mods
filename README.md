@@ -1,7 +1,7 @@
 # Sheikah Mods
 
 A standalone TavernLauncher addon for installing and updating the Sheikah Sanctuary client mods.
-Version **1.2.1**. It runs independently of the Modpacks addon.
+Version **1.2.2**. It runs independently of the Modpacks addon.
 Its windows use TavernLauncher's original color scheme and shared theme controls.
 
 Version 1.2.0 adds next-launch status, a smart action button, live progress, and friendly recovery controls.
@@ -10,8 +10,7 @@ The mod list is fixed in the addon:
 https://att.aservertown.fans/manifest.json
 
 The list is downloaded fresh when checked; its file names and SHA-256 hashes are not frozen into the addon.
-The current list contains 49 DLLs. It provides no optional-mod or dependency information, so Sheikah Mods
-uses the entire list rather than guessing which mods can be left out.
+The list provides no optional-mod or dependency information. Sheikah Mods installs all listed DLLs.
 
 ## Install
 
@@ -57,6 +56,7 @@ Existing Modpacks folders and settings are not migrated or removed automatically
 ## File safety
 
 - Downloads use HTTPS from `att.aservertown.fans`, with SHA-256 verification before anything is installed.
+- DLLs stream to disk with a combined download limit of 512 MiB per update.
 - A different local DLL is shown as **REPLACE**. Applying saves the local copy under
   `SheikahMods/backups` next to the game before replacing it.
 - When the site removes a mod, only an unchanged copy installed by this addon is removed. If Sheikah Mods

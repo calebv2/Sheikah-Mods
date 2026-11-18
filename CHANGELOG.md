@@ -1,3 +1,8 @@
+# Sheikah Mods v1.2.2
+
+- Support large mods such as Forest Rewrite. Downloads stream to disk and are verified against the mod list before installation.
+- Size-limit errors identify the affected file or update.
+
 # Sheikah Mods v1.2.1
 
 - Change the addon author credit to **Sheikah**.

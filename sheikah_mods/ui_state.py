@@ -32,6 +32,8 @@ def friendly_error(error, plan=None):
     text = str(error)
     if isinstance(error, core.Offline):
         return offline_message(plan)
+    if isinstance(error, core.DownloadTooLarge):
+        return text
     if 'Recovery copies' in text:
         return 'Recovery is needed before launching. ' + text
     if 'Close A Township Tale' in text or 'game started' in text:

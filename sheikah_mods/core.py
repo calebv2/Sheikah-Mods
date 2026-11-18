@@ -1,7 +1,9 @@
 """Fixed-manifest checks and transactional installation; no Modpacks dependency."""
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
+from io import BytesIO
 import json
 import os
 from pathlib import Path
@@ -13,13 +15,14 @@ from urllib.parse import urljoin, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 NAME = "Sheikah Mods"
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 MANIFEST_URL = "https://att.aservertown.fans/manifest.json"
 HOST = "att.aservertown.fans"
 STATE_DIR = "SheikahMods"
 GAME_EXE = "A Township Tale.exe"
-MAX_FILE = 64 * 1024 * 1024
-MAX_TOTAL = 512 * 1024 * 1024
+MIB = 1024 * 1024
+MAX_FILE = 512 * MIB
+MAX_TOTAL = 512 * MIB
 _RESERVED = {"con", "prn", "aux", "nul"} | {"com%d" % i for i in range(1, 10)} | {"lpt%d" % i for i in range(1, 10)}
 
 
@@ -32,6 +35,10 @@ class Cancelled(Error):
 
 
 class Offline(Error):
+    pass
+
+
+class DownloadTooLarge(Error):
     pass
 
 
@@ -60,20 +67,34 @@ class _SameSiteRedirects(HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def fetch(url, limit, timeout=20):
+@contextmanager
+def _open_download(url, timeout=20):
     safe_url(url)
     request = Request(url, headers={"User-Agent": "SheikahMods/" + VERSION,
                                    "Cache-Control": "no-cache, no-store", "Pragma": "no-cache"})
     try:
-        with build_opener(_SameSiteRedirects()).open(request, timeout=timeout) as response:
-            safe_url(response.geturl())
-            data = response.read(limit + 1)
+        response = build_opener(_SameSiteRedirects()).open(request, timeout=timeout)
     except Error:
         raise
     except Exception as error:
         raise Offline("Couldn't reach the Sheikah mod site (%s)." % (getattr(error, "reason", None) or error)) from error
+    with response:
+        safe_url(response.geturl())
+        yield response
+
+
+def _read_download(response, size):
+    try:
+        return response.read(size)
+    except Exception as error:
+        raise Offline("The Sheikah mod download was interrupted (%s)." % error) from error
+
+
+def fetch(url, limit, timeout=20):
+    with _open_download(url, timeout) as response:
+        data = _read_download(response, limit + 1)
     if len(data) > limit:
-        raise Error("The downloaded file is larger than allowed.")
+        raise DownloadTooLarge("The Sheikah mod list exceeds the download size limit.")
     return data
 
 
@@ -299,6 +320,25 @@ def _save_state(path, files):
         temp.unlink(missing_ok=True)
 
 
+def _stage_download(mod, destination, reserve_bytes, failed, fetcher):
+    source = _open_download(mod.url) if fetcher is None else BytesIO(fetcher(mod.url, MAX_FILE))
+    checksum = hashlib.sha256()
+    size = 0
+    with source as response, destination.open("wb") as output:
+        while not failed.is_set():
+            chunk = _read_download(response, MIB)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > MAX_FILE:
+                raise DownloadTooLarge(f"{mod.name} exceeds the {MAX_FILE / MIB:g} MiB per-file download limit.")
+            reserve_bytes(len(chunk))
+            checksum.update(chunk)
+            output.write(chunk)
+    if not failed.is_set() and checksum.hexdigest().upper() != mod.sha256:
+        raise Error(mod.name + " failed its SHA-256 check. Nothing was installed.")
+
+
 def install(plan, fetcher=None, running=None, progress=None):
     from .runtime import game_running
     with _install_lock:
@@ -321,35 +361,42 @@ def install(plan, fetcher=None, running=None, progress=None):
             downloads = [change for change in plan.changes if change.mod is not None]
             budget_lock = threading.Lock()
             failed = threading.Event()
+            failure = None
             downloaded_bytes = 0
             completed = 0
             if progress and downloads:
                 progress("Downloading 0 of %d" % len(downloads))
 
+            def reserve_bytes(size):
+                nonlocal downloaded_bytes
+                with budget_lock:
+                    if downloaded_bytes + size > MAX_TOTAL:
+                        raise DownloadTooLarge(f"The update exceeds the {MAX_TOTAL / MIB:g} MiB download limit. Nothing was installed.")
+                    downloaded_bytes += size
+
             def download(change):
-                nonlocal downloaded_bytes, completed
+                nonlocal completed, failure
+                if failed.is_set():
+                    return
                 try:
-                    if failed.is_set():
-                        raise Error("The update download was stopped.")
-                    data = (fetcher or fetch)(change.mod.url, MAX_FILE)
-                    if len(data) > MAX_FILE or hashlib.sha256(data).hexdigest().upper() != change.mod.sha256:
-                        raise Error(change.name + " failed its SHA-256 check. Nothing was installed.")
+                    _stage_download(change.mod, work / change.name, reserve_bytes, failed, fetcher)
                     with budget_lock:
-                        downloaded_bytes += len(data)
-                        if downloaded_bytes > MAX_TOTAL:
-                            raise Error("The update is too large. Nothing was installed.")
-                    (work / change.name).write_bytes(data)
-                    with budget_lock:
+                        if failed.is_set():
+                            return
                         completed += 1
                         if progress:
                             progress("Downloading %d of %d" % (completed, len(downloads)))
-                except Exception:
-                    failed.set()
-                    raise
+                except Exception as error:
+                    with budget_lock:
+                        if failure is None:
+                            failure = error
+                            failed.set()
 
             if downloads:
                 with ThreadPoolExecutor(max_workers=min(4, len(downloads))) as pool:
                     list(pool.map(download, downloads))
+                if failure is not None:
+                    raise failure
             for change in plan.changes:
                 if change.action == "restore":
                     entry = old_files[change.name.lower()]

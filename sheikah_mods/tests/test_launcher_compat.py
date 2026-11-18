@@ -12,7 +12,7 @@ class LauncherCompatibilityTests(unittest.TestCase):
             "sys.modules['uuid'] = None; "
             "from ui_support import client, core; "
             "assert client.BUTTON_TEXT == 'Sheikah Mods'; "
-            "assert core.VERSION == '1.2.1'; "
+            "assert core.VERSION == '1.2.2'; "
             "print('Standalone addon loaded without uuid')"
         )
         result = subprocess.run([sys.executable, '-c', script], cwd=Path(__file__).parent,

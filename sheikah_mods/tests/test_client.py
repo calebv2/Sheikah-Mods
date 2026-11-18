@@ -1,3 +1,4 @@
+from io import BytesIO
 from pathlib import Path
 import sys
 import tempfile
@@ -145,7 +146,7 @@ class RoutedLaunchTests(unittest.TestCase):
         newer = core.Mod('A.dll', hashlib.sha256(b'new').hexdigest().upper(), self.mod.url)
         with patch.object(core.checks, 'get', return_value=(newer,)), \
                 patch.object(window, 'ask_updates', return_value=True), \
-                patch.object(core, 'fetch', return_value=b'new'):
+                patch.object(core, '_open_download', return_value=BytesIO(b'new')):
             client.before_launch(self.sheikah)
         self.assertEqual((self.mods / 'A.dll').read_bytes(), b'new')
 

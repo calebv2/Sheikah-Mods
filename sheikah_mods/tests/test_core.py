@@ -1,5 +1,6 @@
 import hashlib
 import importlib
+from contextlib import nullcontext
 import json
 import os
 from pathlib import Path
@@ -7,7 +8,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -88,6 +89,30 @@ class CoreTests(unittest.TestCase):
         self.assertEqual((self.mods / 'A.dll').read_bytes(), b'old')
         self.assertFalse((self.mods / 'B.dll').exists())
 
+    def test_streams_a_verified_dll_larger_than_the_old_limit(self):
+        chunk = b'x' * core.MIB
+        checksum = hashlib.sha256()
+        for _ in range(65):
+            checksum.update(chunk)
+        mod = core.Mod('ForestRewrite.Client.dll', checksum.hexdigest().upper(), 'https://' + core.HOST + '/forest.dll')
+        response = Mock()
+        response.read.side_effect = [chunk] * 65 + [b'']
+        with patch.object(core, '_open_download', return_value=nullcontext(response)):
+            result = core.install(self.inspect((mod,)), running=lambda _: False)
+        self.assertEqual(result.ready, (mod.name,))
+        self.assertEqual((self.mods / mod.name).stat().st_size, 65 * core.MIB)
+        self.assertEqual(response.read.call_count, 66)
+        for call in response.read.call_args_list:
+            self.assertEqual(call.args, (core.MIB,))
+
+    def test_oversized_file_reports_its_name_and_leaves_the_old_copy(self):
+        (self.mods / 'A.dll').write_bytes(b'old')
+        with patch.object(core, 'MAX_FILE', 4):
+            with self.assertRaisesRegex(core.DownloadTooLarge, r'[AB]\.dll exceeds'):
+                self.install()
+        self.assertEqual((self.mods / 'A.dll').read_bytes(), b'old')
+        self.assertFalse((self.mods / 'B.dll').exists())
+
     def test_edit_during_download_is_preserved(self):
         def fetch(url, limit):
             (self.mods / 'A.dll').write_bytes(b'my-edit')
@@ -129,8 +154,8 @@ class CoreTests(unittest.TestCase):
         self.assertEqual((self.mods / 'A.dll').read_bytes(), b'new-a')
 
     def test_total_download_budget_prevents_installation(self):
-        with patch.object(core, 'MAX_TOTAL', 2):
-            with self.assertRaises(core.Error):
+        with patch.object(core, 'MAX_TOTAL', 8):
+            with self.assertRaisesRegex(core.DownloadTooLarge, 'The update exceeds'):
                 self.install()
         self.assertFalse((self.mods / 'A.dll').exists())
         self.assertFalse((self.mods / 'B.dll').exists())
