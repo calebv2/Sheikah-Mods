@@ -9,13 +9,14 @@ import os
 from pathlib import Path
 import re
 import shutil
+import ssl
 import threading
 import time
 from urllib.parse import urljoin, urlparse
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
 
 NAME = "Sheikah Mods"
-VERSION = "1.2.2"
+VERSION = "1.2.3"
 MANIFEST_URL = "https://att.aservertown.fans/manifest.json"
 HOST = "att.aservertown.fans"
 STATE_DIR = "SheikahMods"
@@ -35,6 +36,10 @@ class Cancelled(Error):
 
 
 class Offline(Error):
+    pass
+
+
+class CertificateError(Offline):
     pass
 
 
@@ -67,17 +72,31 @@ class _SameSiteRedirects(HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+def _download_context():
+    # Supplying cafile avoids loading stale intermediates from machine stores.
+    # Keep this local to the addon; other launcher connections use their own TLS.
+    return ssl.create_default_context(cafile=str(Path(__file__).with_name("cacert.pem")))
+
+
 @contextmanager
 def _open_download(url, timeout=20):
     safe_url(url)
     request = Request(url, headers={"User-Agent": "SheikahMods/" + VERSION,
                                    "Cache-Control": "no-cache, no-store", "Pragma": "no-cache"})
     try:
-        response = build_opener(_SameSiteRedirects()).open(request, timeout=timeout)
+        context = _download_context()
+        response = build_opener(_SameSiteRedirects(), HTTPSHandler(context=context)).open(request, timeout=timeout)
     except Error:
         raise
     except Exception as error:
-        raise Offline("Couldn't reach the Sheikah mod site (%s)." % (getattr(error, "reason", None) or error)) from error
+        reason = getattr(error, "reason", None) or error
+        if isinstance(reason, ssl.SSLCertVerificationError):
+            raise CertificateError(
+                "Couldn't verify the Sheikah mod site's HTTPS certificate. "
+                "Check your PC's date and time and install the latest Sheikah Mods addon "
+                "(%s; %s; %s)." % (reason, ssl.OPENSSL_VERSION, time.strftime("%Y-%m-%d %H:%M:%S %z"))
+            ) from error
+        raise Offline("Couldn't reach the Sheikah mod site (%s)." % reason) from error
     with response:
         safe_url(response.geturl())
         yield response

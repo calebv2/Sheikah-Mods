@@ -1,7 +1,7 @@
 # Sheikah Mods
 
 A standalone TavernLauncher addon for installing and updating the Sheikah Sanctuary client mods.
-Version **1.2.2**. It runs independently of the Modpacks addon.
+Version **1.2.3**. It runs independently of the Modpacks addon.
 Its windows use TavernLauncher's original color scheme and shared theme controls.
 
 Version 1.2.0 adds next-launch status, a smart action button, live progress, and friendly recovery controls.
@@ -56,6 +56,9 @@ Existing Modpacks folders and settings are not migrated or removed automatically
 ## File safety
 
 - Downloads use HTTPS from `att.aservertown.fans`, with SHA-256 verification before anything is installed.
+- Both mod-list and DLL downloads use the included Mozilla root certificates, so a stale certificate
+  in a user's Windows or launcher certificate store does not change the addon's trusted roots.
+  Certificate expiry and hostname checks remain enabled. No extra Python package is required.
 - DLLs stream to disk with a combined download limit of 512 MiB per update.
 - A different local DLL is shown as **REPLACE**. Applying saves the local copy under
   `SheikahMods/backups` next to the game before replacing it.
@@ -75,6 +78,21 @@ Sheikah Mods has no custom manifest field, pack creation, rename/delete, zip imp
 pack merging, individual mod toggles, or loose-mod organizer. Server switching is fixed to Sheikah.
 TavernLauncher still handles game patching and
 MelonLoader. This addon does not determine whether an individual server mod is optional.
+
+## HTTPS certificates
+
+Keep `cacert.pem` beside `core.py` when installing or packaging the addon.
+If certificate verification still fails, check the affected PC's date and time and install the
+latest addon. The launcher log includes the SSL error, OpenSSL version, and local time.
+
+`cacert.pem` is the unmodified Mozilla CA bundle from
+[certifi 2026.10.23](https://pypi.org/project/certifi/2026.10.23/), distributed under the
+Mozilla Public License 2.0 in `CERTIFI-LICENSE`. Refresh it from a maintained certifi release
+when preparing future addon releases; do not download replacement trust roots at runtime.
+
+- Source wheel: `certifi-2026.10.23-py3-none-any.whl` from PyPI.
+- Wheel SHA-256: `e9b54de76e530bb6cf0ccd036787103acb58fd42ba930ea8bf948ddbaa2f61d1`.
+- Bundle SHA-256: `2ef52ad56b4803e264045c915e55c236cbfa045b84b81efefc218a19eb44bd2b`.
 
 ## Development
 

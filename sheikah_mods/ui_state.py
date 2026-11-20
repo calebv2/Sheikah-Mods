@@ -30,6 +30,8 @@ def offline_message(plan):
 
 def friendly_error(error, plan=None):
     text = str(error)
+    if isinstance(error, core.CertificateError):
+        return "Couldn't verify the mod site's HTTPS certificate. Check your PC's date and time, update the Sheikah Mods addon, then choose Retry. Details are in the launcher log."
     if isinstance(error, core.Offline):
         return offline_message(plan)
     if isinstance(error, core.DownloadTooLarge):

@@ -1,3 +1,9 @@
+# Sheikah Mods v1.2.3
+
+- Use an included Mozilla CA bundle for mod-list and DLL downloads to avoid stale certificates in individual Windows or launcher stores. HTTPS certificate, hostname, same-site redirect, and DLL hash checks stay enabled.
+- Give certificate failures specific recovery guidance and include the SSL error, OpenSSL version, and local time in the launcher log. Existing offline behavior is preserved.
+- Add offline TLS tests for trusted downloads, expiry, hostname mismatch, untrusted issuers, redirect restrictions, and isolated certificate loading.
+
 # Sheikah Mods v1.2.2
 
 - Support large mods such as Forest Rewrite. Downloads stream to disk and are verified against the mod list before installation.

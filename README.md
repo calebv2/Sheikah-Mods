@@ -1,7 +1,7 @@
 # Sheikah Mods
 
 A standalone TavernLauncher addon for installing and updating the Sheikah Sanctuary client mods.
-Version **1.2.2**. It runs independently of the Modpacks addon.
+Version **1.2.3**. It runs independently of the Modpacks addon.
 Its windows use TavernLauncher's original color scheme and shared theme controls.
 
 Version 1.2.0 adds next-launch status, a smart action button, live progress, and friendly recovery controls.
@@ -56,6 +56,8 @@ Existing Modpacks folders and settings are not migrated or removed automatically
 ## File safety
 
 - Downloads use HTTPS from `att.aservertown.fans`, with SHA-256 verification before anything is installed.
+- Mod-list and DLL downloads use the included Mozilla certificate store, with certificate expiry
+  and hostname validation enabled. No extra Python package is required.
 - DLLs stream to disk with a combined download limit of 512 MiB per update.
 - A different local DLL is shown as **REPLACE**. Applying saves the local copy under
   `SheikahMods/backups` next to the game before replacing it.
@@ -75,6 +77,16 @@ Sheikah Mods has no custom manifest field, pack creation, rename/delete, zip imp
 pack merging, individual mod toggles, or loose-mod organizer. Server switching is fixed to Sheikah.
 TavernLauncher still handles game patching and
 MelonLoader. This addon does not determine whether an individual server mod is optional.
+
+## HTTPS certificates
+
+Keep `cacert.pem` beside `core.py` when installing or packaging the addon. Version 1.2.3 uses
+this bundle for downloads so stale certificates in an individual PC's default store do not change
+the addon's trusted roots. If verification still fails, check the PC's date and time and collect
+the launcher log, which includes the SSL error, OpenSSL version, and local time.
+
+Certificate bundle provenance, license, and refresh instructions are in
+[sheikah_mods/README.md](sheikah_mods/README.md#https-certificates).
 
 ## Development
 
