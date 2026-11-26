@@ -1,13 +1,15 @@
-"""Focused Sheikah Mods windows, with no pack-management controls."""
+"""Sheikah Mods windows for reviewing, adding, and switching packs."""
 import os
 from pathlib import Path
 import threading
 import tkinter as tk
+from tkinter import filedialog, messagebox, simpledialog, ttk
+from urllib.parse import urlsplit
 
 import tavern_shared.theme as _theme
 import tavern_shared.window_chrome as _chrome
 
-from . import core, melon, switching, ui_state
+from . import compatibility, core, history, melon, packs, switching, ui_state
 
 def background(widget, work, done, progress=None):
     box = []
@@ -205,8 +207,6 @@ def _header(parent, subtitle):
     t = _theme
     header = tk.Frame(parent, bg=t.BG)
     header.pack(fill='x', padx=24, pady=(20, 16))
-    tk.Label(header, text='SHEIKAH SANCTUARY', bg=t.BG, fg=t.AMBER,
-             font=('Segoe UI', 9, 'bold'), anchor='w').pack(fill='x')
     tk.Label(header, text=core.NAME, bg=t.BG, fg=t.PARCH,
              font=('Georgia', 24, 'bold'), anchor='w').pack(fill='x', pady=(6, 6))
     label = tk.Label(header, text=subtitle, bg=t.BG, fg=t.MUTED, font=('Segoe UI', 10),
@@ -240,11 +240,19 @@ class ReviewDialog(tk.Toplevel):
         installs = sum(c.action == 'install' for c in plan.changes)
         updates = sum(c.action in ('update', 'replace') for c in plan.changes)
         removals = sum(c.action in ('remove', 'restore') for c in plan.changes)
-        _header(self, '%d to install  ·  %d to update  ·  %d leaving the list\n%s' % (
-            installs, updates, removals, core.HOST))
+        pack = plan.pack or packs.SHEIKAH
+        source = urlsplit(pack.manifest_url).hostname
+        release = getattr(plan.mods, 'release', '')
+        name = pack.name + (f' {release}' if release else '')
+        _header(self, '%s · %s\n%d to install  ·  %d to update  ·  %d leaving the list' % (
+            name, source, installs, updates, removals))
         footer = tk.Frame(self, bg=t.BG)
         footer.pack(side='bottom', fill='x')
         tk.Frame(footer, bg=t.BORDER, height=1).pack(fill='x')
+        if plan.warnings:
+            _theme._btn(footer, 'Compatibility details',
+                        lambda: review_text(self, 'Compatibility details', plan.warnings),
+                        padx=12, pady=4).pack(anchor='w', padx=24, pady=(8, 0))
         tk.Label(footer, text='Skipped changes stay skipped for this session. Check now lets you reconsider.',
                  bg=t.BG, fg=t.MUTED, wraplength=600, justify='left', anchor='w',
                  font=('Segoe UI', 9)).pack(fill='x', padx=24, pady=(12, 8))
@@ -272,9 +280,12 @@ class ReviewDialog(tk.Toplevel):
         self.destroy()
 
 
-def ask_updates(parent, plan, launching=False):
+def ask_updates(parent, plan, launching=False, restoring=False):
     previous = parent.grab_current() if parent is not None else None
     dialog = ReviewDialog(parent, plan, launching)
+    if restoring:
+        dialog.apply_button.configure(text='Restore saved version')
+        dialog.skip_button.configure(text='Cancel')
     try:
         dialog.wait_window()
         return dialog.choice
@@ -287,24 +298,260 @@ def ask_updates(parent, plan, launching=False):
                 pass
 
 
+def review_text(parent, title, lines, confirm=None):
+    dialog = tk.Toplevel(parent)
+    _chrome._start_hidden(dialog)
+    dialog.configure(bg=_theme.BG)
+    dialog.title(title)
+    choice = False
+    previous = parent.grab_current()
+    _header(dialog, title)
+    footer = tk.Frame(dialog, bg=_theme.BG)
+    footer.pack(side='bottom', fill='x', padx=24, pady=18)
+
+    def accept():
+        nonlocal choice
+        choice = True
+        dialog.destroy()
+
+    if confirm:
+        _theme._btn(footer, confirm, accept, 'primary', padx=12, pady=7).pack(side='right')
+    close = _theme._btn(footer, 'Cancel' if confirm else 'Close', dialog.destroy, padx=12, pady=7)
+    close.pack(side='right', padx=(0, 8))
+    body = tk.Frame(dialog, bg=_theme.BG)
+    body.pack(fill='both', expand=True, padx=24)
+    text = tk.Text(body, bg=_theme.SURF, fg=_theme.PARCH, wrap='word',
+                   font=('Segoe UI', 10), padx=12, pady=10, relief='flat')
+    scrollbar = _theme._mk_scrollbar(body, text.yview)
+    scrollbar.pack(side='right', fill='y')
+    text.configure(yscrollcommand=scrollbar.set)
+    text.pack(side='left', fill='both', expand=True)
+    text.insert('1.0', '\n'.join(lines))
+    text.configure(state='disabled')
+    dialog.bind('<Escape>', lambda event: dialog.destroy())
+    _size(dialog, parent)
+    close.focus_set()
+    dialog.grab_set()
+    try:
+        dialog.wait_window()
+    finally:
+        if previous is not None:
+            try:
+                if previous.winfo_viewable():
+                    previous.grab_set()
+            except tk.TclError:
+                pass
+    return choice
+
+
+class ManifestDetailsDialog(simpledialog.Dialog):
+    def __init__(self, parent, game_dir):
+        self.game_dir = game_dir
+        super().__init__(parent, title="Manifest details")
+
+    def body(self, master):
+        self.entries = {}
+        for row, (key, label) in enumerate((
+            ("release", "Release label"),
+            ("game_builds", "Supported game builds"),
+            ("melonloader_versions", "Supported MelonLoader versions"),
+        )):
+            ttk.Label(master, text=label).grid(row=row, column=0, sticky="w", padx=8, pady=5)
+            entry = ttk.Entry(master, width=45)
+            entry.grid(row=row, column=1, sticky="ew", padx=8, pady=5)
+            self.entries[key] = entry
+        ttk.Label(master, text="All fields are optional. Separate multiple versions with commas.").grid(
+            row=3, columnspan=2, sticky="w", padx=8)
+        ttk.Button(master, text="Use this installation's versions", command=self._use_local).grid(
+            row=4, columnspan=2, sticky="w", padx=8, pady=8)
+        return self.entries["release"]
+
+    def _use_local(self):
+        for key, value in (("game_builds", compatibility.game_build(self.game_dir)),
+                           ("melonloader_versions", compatibility.loader_version(self.game_dir))):
+            if value:
+                self.entries[key].delete(0, "end")
+                self.entries[key].insert(0, value)
+
+    def validate(self):
+        release = self.entries["release"].get().strip()
+        requirements = {}
+        for key in compatibility.LABELS:
+            value = self.entries[key].get().strip()
+            if value:
+                requirements[key] = [item.strip() for item in value.split(",")]
+        try:
+            self.result = release, compatibility.normalize(requirements)
+        except core.Error as error:
+            messagebox.showerror(core.NAME, str(error), parent=self)
+            return False
+        return True
+
+
+class AddPackDialog(simpledialog.Dialog):
+    def __init__(self, parent, game_dir, original=None):
+        self.game_dir = game_dir
+        self.original = original
+        self.importing = False
+        super().__init__(parent, title="Edit mod pack" if original else "Add mod pack")
+
+    def body(self, master):
+        master.columnconfigure(1, weight=1)
+        self.entries = []
+        for row, (label, default) in enumerate((
+            ("Pack name", self.original.name if self.original else ""),
+            ("Server host or IP", self.original.host if self.original else ""),
+            ("Server port", str(self.original.port if self.original else packs.DEFAULT_PORT)),
+            ("HTTPS manifest URL", self.original.manifest_url if self.original else ""),
+        )):
+            ttk.Label(master, text=label).grid(row=row, column=0, sticky="w", padx=(12, 8), pady=6)
+            entry = ttk.Entry(master, width=42)
+            entry.insert(0, default)
+            entry.grid(row=row, column=1, sticky="ew", padx=(0, 12), pady=6)
+            self.entries.append(entry)
+        ttk.Label(master, text="Only add packs from publishers you trust. Mods run as game code.",
+                  wraplength=380).grid(row=len(self.entries), columnspan=2, sticky="w", padx=12, pady=6)
+        if self.original is None:
+            actions = ttk.Frame(master)
+            actions.grid(row=len(self.entries) + 1, columnspan=2, sticky="w", padx=12, pady=6)
+            self.create_button = ttk.Button(actions, text="Create manifest from DLLs", command=self.create_manifest)
+            self.create_button.pack(side="left")
+            self.import_button = ttk.Button(actions, text="Import share link", command=self.import_link)
+            self.import_button.pack(side="left", padx=(8, 0))
+        return self.entries[0]
+
+    def import_link(self):
+        link = simpledialog.askstring("Import share link", "Paste the link provided by the pack owner.", parent=self)
+        if not link:
+            return
+        try:
+            pack = packs.parse_link(link)
+        except core.Error as error:
+            messagebox.showerror(core.NAME, str(error), parent=self)
+            return
+        self.importing = True
+        self.import_button.configure(state="disabled", text="Reading manifest...")
+
+        def done(mods, error):
+            self.importing = False
+            self.import_button.configure(state="normal", text="Import share link")
+            if error:
+                messagebox.showerror(core.NAME, str(error), parent=self)
+                return
+            version = getattr(mods, "release", "")
+            details = [pack.name + (f" · {version}" if version else ""),
+                       f"Server {pack.host}:{pack.port}", f"Publisher {urlsplit(pack.manifest_url).hostname}",
+                       pack.manifest_url, "", *compatibility.warnings(self.game_dir, mods), "",
+                       f"{len(mods)} client DLLs", *(mod.name for mod in mods), "",
+                       "Only add packs from publishers you trust. Adding the pack leaves installation for later."]
+            if review_text(self, "Review shared pack", details, "Add pack"):
+                try:
+                    self.result = packs.import_shared(self.game_dir, pack)
+                except (core.Error, OSError) as error:
+                    messagebox.showerror(core.NAME, str(error), parent=self)
+                    return
+                self.cancel()
+
+        background(self, lambda: core.read_manifest(manifest_url=pack.manifest_url), done)
+
+    def create_manifest(self):
+        folder = filedialog.askdirectory(parent=self, title="Choose the folder containing the pack's client DLLs")
+        if not folder:
+            return
+        path = Path(folder, "manifest.json")
+        replace = path.exists()
+        if replace and not messagebox.askyesno(core.NAME, f"Replace {path}?", parent=self):
+            return
+        details = ManifestDetailsDialog(self, self.game_dir).result
+        if details is None:
+            return
+        release, requirements = details
+        self.create_button.configure(state="disabled", text="Creating manifest...")
+
+        def done(result, error):
+            self.create_button.configure(state="normal", text="Create manifest from DLLs")
+            if error:
+                messagebox.showerror(core.NAME, str(error), parent=self)
+            else:
+                messagebox.showinfo(core.NAME, "Saved %s\n\nUpload manifest.json and its DLLs to the same HTTPS folder, "
+                                    "then paste the manifest URL here." % result, parent=self)
+
+        background(self, lambda: packs.create_manifest(folder, replace=replace,
+                   release=release, requirements=requirements), done)
+
+    def validate(self):
+        if self.importing:
+            return False
+        try:
+            values = tuple(entry.get() for entry in self.entries)
+            if self.original is None:
+                self.result = packs.add(self.game_dir, *values)
+            else:
+                self.result = packs.edit(self.game_dir, self.original, *values)
+        except (core.Error, OSError) as error:
+            messagebox.showerror(core.NAME, str(error), parent=self)
+            return False
+        return True
+
+
 class SheikahWindow(tk.Toplevel):
-    def __init__(self, root, game_dir, check, apply):
+    def __init__(self, root, game_dir, check, apply, *, on_select=None, on_switch=None,
+                 on_automatic=None, on_add=None, on_preview=None, options=None):
+        self.locked = packs.locked()
+        available = packs.catalog(game_dir)
+        active, _ = switching.selection(game_dir)
         super().__init__(root)
         _chrome._start_hidden(self)
         self.game_dir = game_dir
         self._rendered_plan = None
         self.configure(bg=_theme.BG)
         self.title(core.NAME)
-        self.subtitle = _header(self, 'The Sheikah Sanctuary client mod list, ready to install and keep up to date.')
+        self.subtitle = _header(self, 'Choose a pack to review its mods.')
+        self.available = available
+        self.pack_menu = None
+        if not self.locked and on_select is not None:
+            controls = tk.Frame(self, bg=_theme.BG)
+            controls.pack(fill='x', padx=24, pady=(0, 8))
+            self.pack_menu = ttk.Combobox(controls, state='readonly', width=24)
+            self.pack_menu.pack(side='left', fill='x', expand=True)
+            self.pack_menu.bind('<<ComboboxSelected>>', lambda event: on_select())
+            self.switch_button = _theme._btn(controls, 'Switch now', on_switch, padx=10, pady=5)
+            self.switch_button.pack(side='left', padx=(8, 0))
+            self.add_button = _theme._btn(controls, 'Add pack', on_add, padx=10, pady=5)
+            self.add_button.pack(side='left', padx=(8, 0))
+            self.options_button = None
+            if options:
+                theme = _theme
+                self.options_button = tk.Menubutton(controls, text='Pack options ▾', bg=theme.SURF,
+                                                    fg=theme.PARCH, padx=10, pady=5, relief='flat')
+                self.options_menu = tk.Menu(self.options_button, tearoff=False)
+                for label, action in options:
+                    self.options_menu.add_command(label=label, command=action)
+                self.options_button.configure(menu=self.options_menu)
+                self.options_button.pack(side='left', padx=(8, 0))
+            mode = tk.Frame(self, bg=_theme.BG)
+            mode.pack(fill='x', padx=24, pady=(0, 10))
+            self.mode_label = tk.Label(mode, bg=_theme.BG, fg=_theme.MUTED, anchor='w',
+                                       font=('Segoe UI', 9))
+            self.mode_label.pack(side='left', fill='x', expand=True)
+            self.auto_button = _theme._btn(mode, 'Follow server', on_automatic, padx=10, pady=5)
+            self.auto_button.pack(side='right')
+            if on_preview:
+                self.preview_button = _theme._btn(mode, 'Preview launch', on_preview, padx=10, pady=5)
+                self.preview_button.pack(side='right', padx=(8, 8))
+                self.next_label = tk.Label(self, bg=_theme.BG, fg=_theme.MUTED, anchor='w',
+                                           font=('Segoe UI', 9))
+                self.next_label.pack(fill='x', padx=24, pady=(0, 8))
+        self._select(active)
         footer = tk.Frame(self, bg=_theme.BG)
         footer.pack(side='bottom', fill='x', padx=24, pady=(10, 18))
         self.status = tk.Label(footer, text=core.HOST, bg=_theme.BG, fg=_theme.MUTED,
                                anchor='w', justify='left', wraplength=620, font=('Segoe UI', 9))
         self.status.pack(fill='x', pady=(0, 10))
-        tk.Label(footer, text='Automatic: Sheikah mods load only for att.aservertown.fans:1757.\n'
-                 'Other servers and Main Menu use your regular mods.', bg=_theme.BG, fg=_theme.MUTED,
-                 anchor='w', justify='left', wraplength=620,
-                 font=('Segoe UI', 9)).pack(fill='x', pady=(0, 10))
+        if self.locked:
+            tk.Label(footer, text='Sheikah mods follow att.aservertown.fans:1757.',
+                     bg=_theme.BG, fg=_theme.MUTED, anchor='w',
+                     font=('Segoe UI', 9)).pack(fill='x', pady=(0, 10))
         buttons = tk.Frame(footer, bg=_theme.BG)
         buttons.pack(fill='x')
         self.check_button = _theme._btn(buttons, 'Check now', check, padx=12, pady=8, font=('Segoe UI', 9))
@@ -323,17 +570,69 @@ class SheikahWindow(tk.Toplevel):
         self.bind('<MouseWheel>', self.list.wheel)
         _size(self, root)
 
+    def _select(self, id):
+        pack = next((item for item in self.available if item.id == id), packs.SHEIKAH)
+        if self.pack_menu is not None:
+            self.pack_menu.configure(values=[item.name for item in self.available])
+            self.pack_menu.set(pack.name)
+
+    def refresh_packs(self, id):
+        self.available = packs.catalog(self.game_dir)
+        self._select(id)
+
+    def selected_pack(self):
+        if self.pack_menu is not None:
+            index = self.pack_menu.current()
+            if index > 0:
+                return self.available[index]
+        return None
+
+    def show_next(self, text):
+        if hasattr(self, 'next_label'):
+            self.next_label.configure(text=text)
+
     def show(self, plan=None, status=None, busy=False, issue=None):
+        pack = self.selected_pack() or packs.SHEIKAH
+        active, manual = switching.selection(self.game_dir)
+        if self.pack_menu is not None:
+            active_name = next((item.name for item in self.available if item.id == active), 'Regular mods')
+            mode = 'Manual' if manual else 'Automatic'
+            self.mode_label.configure(text=f'{mode} · Active files: {active_name}')
+            self.pack_menu.configure(state='disabled' if busy else 'readonly')
+            self.add_button.configure(state='disabled' if busy else 'normal')
+            self.switch_button.configure(state='disabled' if busy or (manual and active == pack.id) else 'normal')
+            self.auto_button.configure(state='normal' if manual and not busy else 'disabled')
+            if hasattr(self, 'preview_button'):
+                self.preview_button.configure(state='disabled' if busy else 'normal')
+            if self.options_button is not None:
+                self.options_button.configure(state='disabled' if busy else 'normal')
+                editable = 'normal' if pack != packs.SHEIKAH else 'disabled'
+                self.options_menu.entryconfigure('Edit pack', state=editable)
+                self.options_menu.entryconfigure('Remove pack', state=editable)
+                try:
+                    available, pinned = history.available(self.game_dir, self.selected_pack())
+                except core.Error:
+                    available, pinned = False, False
+                self.options_menu.entryconfigure('Restore previous version', state='normal' if available else 'disabled')
+                self.options_menu.entryconfigure('Resume updates', state='normal' if pinned else 'disabled')
+        server = f'{pack.host}:{pack.port}'
         if plan is not None:
-            location = 'Parked for other servers.' if switching.is_parked(plan.game_dir) else 'In Mods for Sheikah.'
-            self.subtitle.configure(text='%d of %d listed mods match the Sheikah list.\n%s' % (len(plan.ready), len(plan.mods), location))
+            location = 'Active in Mods' if active == pack.id else 'Inactive'
+            tags = [server, location]
+            if release := getattr(plan.mods, 'release', ''):
+                tags.append(release)
+            if plan.pinned:
+                tags.append('Restored version')
+            if plan.warnings:
+                tags.append('Compatibility notice')
+            self.subtitle.configure(text=' · '.join(tags) + f'\n{len(plan.ready)} of {len(plan.mods)} listed mods match.')
             if plan is not self._rendered_plan:
                 self.list.fill(plan, include_ready=True)
                 self._rendered_plan = plan
-        elif not busy:
+        else:
             self.list.clear()
             self._rendered_plan = None
-            self.subtitle.configure(text='Choose Check mods to inspect the selected game.')
+            self.subtitle.configure(text=f'{server} · {urlsplit(pack.manifest_url).hostname}')
         self.check_button.configure(state='disabled' if busy else 'normal')
         label, enabled = ui_state.action(plan, busy, issue)
         self.apply_button.configure(text=label, state='normal' if enabled else 'disabled')

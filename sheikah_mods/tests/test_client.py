@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from ui_support import client, core, dialog_style, sample_plan, window
+from ui_support import client, core, dialog_style, make_root, sample_plan, window
 
 
 def run_inline(root, work, text, progress=None):
@@ -174,9 +174,7 @@ class WindowTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = tk.Tk()
-        self.root.withdraw()
-        self.addCleanup(self.root.destroy)
+        make_root(self)
         style = dialog_style()
         style.__enter__()
         self.addCleanup(style.__exit__, None, None, None)

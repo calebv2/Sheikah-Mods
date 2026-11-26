@@ -1,4 +1,4 @@
-"""Fixed-manifest checks and transactional installation; no Modpacks dependency."""
+"""Manifest checks and transactional installation for each mod pack."""
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -12,11 +12,11 @@ import shutil
 import ssl
 import threading
 import time
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
 
 NAME = "Sheikah Mods"
-VERSION = "1.2.3"
+VERSION = "1.4.0"
 MANIFEST_URL = "https://att.aservertown.fans/manifest.json"
 HOST = "att.aservertown.fans"
 STATE_DIR = "SheikahMods"
@@ -54,21 +54,28 @@ def safe_name(name):
             and name.split(".")[0].lower() not in _RESERVED)
 
 
-def safe_url(url):
-    parsed = urlparse(url)
+def safe_url(url, origin=HOST):
     try:
-        valid = (parsed.scheme == "https" and parsed.hostname == HOST
-                 and parsed.port in (None, 443) and not parsed.username and not parsed.password)
+        parsed = urlsplit(url)
+        valid = (parsed.scheme == "https" and parsed.hostname
+                 and (origin is None or parsed.hostname == origin)
+                 and parsed.port in (None, 443) and parsed.username is None
+                 and parsed.password is None and not parsed.fragment
+                 and not re.search(r"[\s\\\x00-\x1f\x7f]", url))
     except ValueError:
         valid = False
     if not valid:
-        raise Error("Sheikah Mods only downloads over HTTPS from " + HOST + ".")
+        expected = " from " + origin if origin else ""
+        raise Error("Enter a valid HTTPS download URL" + expected + ".")
     return url
 
 
 class _SameSiteRedirects(HTTPRedirectHandler):
+    def __init__(self, origin):
+        self.origin = origin
+
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        safe_url(newurl)
+        safe_url(newurl, self.origin)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -79,26 +86,26 @@ def _download_context():
 
 
 @contextmanager
-def _open_download(url, timeout=20):
-    safe_url(url)
+def _open_download(url, timeout=20, origin=HOST):
+    safe_url(url, origin)
     request = Request(url, headers={"User-Agent": "SheikahMods/" + VERSION,
                                    "Cache-Control": "no-cache, no-store", "Pragma": "no-cache"})
     try:
         context = _download_context()
-        response = build_opener(_SameSiteRedirects(), HTTPSHandler(context=context)).open(request, timeout=timeout)
+        response = build_opener(_SameSiteRedirects(origin), HTTPSHandler(context=context)).open(request, timeout=timeout)
     except Error:
         raise
     except Exception as error:
         reason = getattr(error, "reason", None) or error
         if isinstance(reason, ssl.SSLCertVerificationError):
             raise CertificateError(
-                "Couldn't verify the Sheikah mod site's HTTPS certificate. "
+                "Couldn't verify the mod pack site's HTTPS certificate. "
                 "Check your PC's date and time and install the latest Sheikah Mods addon "
                 "(%s; %s; %s)." % (reason, ssl.OPENSSL_VERSION, time.strftime("%Y-%m-%d %H:%M:%S %z"))
             ) from error
-        raise Offline("Couldn't reach the Sheikah mod site (%s)." % reason) from error
+        raise Offline("Couldn't reach the mod pack site (%s)." % reason) from error
     with response:
-        safe_url(response.geturl())
+        safe_url(response.geturl(), origin)
         yield response
 
 
@@ -109,8 +116,8 @@ def _read_download(response, size):
         raise Offline("The Sheikah mod download was interrupted (%s)." % error) from error
 
 
-def fetch(url, limit, timeout=20):
-    with _open_download(url, timeout) as response:
+def fetch(url, limit, timeout=20, origin=HOST):
+    with _open_download(url, timeout, origin) as response:
         data = _read_download(response, limit + 1)
     if len(data) > limit:
         raise DownloadTooLarge("The Sheikah mod list exceeds the download size limit.")
@@ -124,21 +131,50 @@ class Mod:
     url: str
 
 
-def read_manifest(fetcher=None):
-    # The URL is fixed; only the site's list of files changes between releases.
-    url = MANIFEST_URL + "?_sheikah_check=" + str(time.time_ns())
-    data = (fetcher or fetch)(url, 2 * 1024 * 1024)
-    return parse_manifest(data)
+class Manifest(tuple):
+    def __new__(cls, mods, release="", compatibility=None):
+        manifest = super().__new__(cls, mods)
+        manifest.release = release
+        manifest.compatibility = compatibility or {}
+        return manifest
 
 
-def parse_manifest(data):
+def manifest_data(mods):
+    data = {"files": [{"filename": mod.name, "sha256": mod.sha256, "url": mod.url} for mod in mods]}
+    for field in ("release", "compatibility"):
+        value = getattr(mods, field, None)
+        if value:
+            data[field] = value
+    return data
+
+
+def read_manifest(fetcher=None, manifest_url=MANIFEST_URL):
+    parts = urlsplit(safe_url(manifest_url, None))
+    query = "&".join(filter(None, (parts.query, "_sheikah_check=" + str(time.time_ns()))))
+    url = urlunsplit(parts._replace(query=query))
+    if fetcher is not None:
+        data = fetcher(url, 2 * MIB)
+    elif manifest_url == MANIFEST_URL:
+        data = fetch(url, 2 * MIB)
+    else:
+        data = fetch(url, 2 * MIB, origin=parts.hostname)
+    return parse_manifest(data, manifest_url)
+
+
+def parse_manifest(data, manifest_url=MANIFEST_URL):
+    from . import compatibility
     try:
         value = json.loads(data.decode("utf-8-sig"))
     except (ValueError, UnicodeDecodeError) as error:
-        raise Error("The Sheikah site didn't return a valid mod list.") from error
+        raise Error("The pack site didn't return a valid mod list.") from error
     entries = value.get("files") if isinstance(value, dict) else None
     if not isinstance(entries, list) or not entries or len(entries) > 300:
-        raise Error("The Sheikah mod list is empty or invalid. Installed mods were left alone.")
+        raise Error("The mod list is empty or invalid. Installed mods were left alone.")
+    release = value.get("release", "")
+    if not isinstance(release, str) or len(release) > 60 or (release and not release.isprintable()):
+        raise Error("The manifest has an invalid release label.")
+    requirements = compatibility.normalize(value.get("compatibility", {}))
+    manifest_host = urlsplit(safe_url(manifest_url, None)).hostname
     mods, seen = [], set()
     for entry in entries:
         if not isinstance(entry, dict) or not safe_name(entry.get("filename")):
@@ -152,13 +188,14 @@ def parse_manifest(data):
             raise Error("The mod list has an invalid SHA-256 for " + name)
         if not isinstance(url, str):
             raise Error("The mod list has no download URL for " + name)
-        mods.append(Mod(name, digest.upper(), safe_url(urljoin(MANIFEST_URL, url))))
+        mods.append(Mod(name, digest.upper(), safe_url(urljoin(manifest_url, url), manifest_host)))
         seen.add(name.lower())
-    return tuple(sorted(mods, key=lambda mod: mod.name.casefold()))
+    return Manifest(sorted(mods, key=lambda mod: mod.name.casefold()), release, requirements)
 
 
 class ManifestChecks:
-    def __init__(self):
+    def __init__(self, manifest_url=MANIFEST_URL):
+        self.manifest_url = manifest_url
         self.lock = threading.Lock()
         self.result = None
         self.expires = 0
@@ -172,7 +209,7 @@ class ManifestChecks:
             future = self.result
         if owner:
             try:
-                mods = read_manifest()
+                mods = read_manifest() if self.manifest_url == MANIFEST_URL else read_manifest(manifest_url=self.manifest_url)
             except Exception as error:
                 lifetime = 10
                 future.set_exception(error)
@@ -185,7 +222,8 @@ class ManifestChecks:
 
 
 checks = ManifestChecks()
-_install_lock = threading.Lock()
+_pack_checks = {}
+_install_lock = threading.RLock()
 _deferred = {}
 
 
@@ -197,13 +235,14 @@ def digest(path):
     return result.hexdigest().upper()
 
 
-def state_path(game_dir):
-    return Path(game_dir, STATE_DIR, "state.json")
+def state_path(game_dir, pack=None):
+    from . import packs
+    return packs.state_root(game_dir, packs.pack_id(pack)) / "state.json"
 
 
-def _state_bytes(game_dir):
+def _state_bytes(game_dir, pack=None):
     try:
-        return state_path(game_dir).read_bytes()
+        return state_path(game_dir, pack).read_bytes()
     except FileNotFoundError:
         return b""
 
@@ -250,31 +289,54 @@ class Plan:
     observed: dict
     storage: str = "Mods"
     offline: bool = False
+    pack: object = None
+    pinned: bool = False
+    warnings: tuple = ()
 
     @property
     def fingerprint(self):
         return tuple((c.name, c.action, c.current, c.mod.sha256 if c.mod else "") for c in self.changes)
 
 
-def inspect(game_dir, mods=None, force=False):
-    from . import switching
+def inspect(game_dir, mods=None, force=False, pack=None):
+    from . import history, packs, switching
+    if pack is not None and packs.locked():
+        raise Error("This copy of Sheikah Mods is locked to Sheikah Sanctuary.")
     game_dir = str(Path(game_dir).resolve())
     if not Path(game_dir, "Mods").is_dir():
         raise Error("Install MelonLoader with TavernLauncher's Mods button, then start the game once to create its Mods folder.")
+    with _install_lock:
+        saved = history.read(_state_bytes(game_dir, pack))
+        if saved.pinned:
+            return _inspect_files(game_dir, history.manifest(saved.installed, pack), False, pack, pinned=True)
     offline = False
     if mods is not None:
-        mods = tuple(mods)
+        if not isinstance(mods, tuple):
+            mods = tuple(mods)
     else:
         try:
-            mods = checks.get(force)
+            with _install_lock:
+                source = checks if pack is None else _pack_checks.setdefault(pack, ManifestChecks(pack.manifest_url))
+            mods = source.get(force)
         except Offline:
-            mods = switching.cached_manifest(game_dir)
-            if not mods:
-                raise
             offline = True
-    switching.remember_manifest(game_dir, mods)
-    folder = switching.storage_folder(game_dir)
-    raw = _state_bytes(game_dir)
+    with _install_lock:
+        saved = history.read(_state_bytes(game_dir, pack))
+        if saved.pinned:
+            return _inspect_files(game_dir, history.manifest(saved.installed, pack), False, pack, pinned=True)
+        if offline:
+            mods = switching.cached_manifest(game_dir, pack)
+            if not mods:
+                raise Offline("No saved manifest is available for this mod pack.")
+        else:
+            switching.remember_manifest(game_dir, mods, pack)
+        return _inspect_files(game_dir, mods, offline, pack)
+
+
+def _inspect_files(game_dir, mods, offline, pack, pinned=False):
+    from . import compatibility, switching
+    folder = switching.storage_folder(game_dir, pack)
+    raw = _state_bytes(game_dir, pack)
     managed = _read_state(raw)
     present = {path.name.lower(): path.name for path in folder.iterdir() if path.is_file()} if folder.is_dir() else {}
     observed, changes, ready = {}, [], []
@@ -305,33 +367,48 @@ def inspect(game_dir, mods=None, force=False):
         else:
             changes.append(Change(name, "remove", current, note="No longer listed. Only the unchanged copy installed by Sheikah Mods is removed."))
     return Plan(game_dir, mods, tuple(changes), tuple(ready), raw, observed,
-                str(folder.relative_to(Path(game_dir))), offline)
+                str(folder.relative_to(Path(game_dir))), offline, pack, pinned,
+                compatibility.warnings(game_dir, mods))
+
+
+def restore_plan(game_dir, pack=None):
+    from . import history
+    game_dir = str(Path(game_dir).resolve())
+    with _install_lock:
+        saved = history.read(_state_bytes(game_dir, pack))
+        _, mods = history.snapshot(game_dir, pack, saved)
+        return _inspect_files(game_dir, mods, False, pack)
 
 
 def defer(plan):
-    _deferred[plan.game_dir] = plan.fingerprint
+    _deferred[plan.game_dir, plan.pack] = plan.fingerprint
 
 
 def deferred(plan):
-    return _deferred.get(plan.game_dir) == plan.fingerprint
+    return _deferred.get((plan.game_dir, plan.pack)) == plan.fingerprint
 
 
 def _unchanged(plan):
     from . import switching
-    if _state_bytes(plan.game_dir) != plan.state_raw:
+    if _state_bytes(plan.game_dir, plan.pack) != plan.state_raw:
         return False
     folder = Path(plan.game_dir, plan.storage)
-    if switching.storage_folder(plan.game_dir) != folder:
+    if switching.storage_folder(plan.game_dir, plan.pack) != folder:
         return False
     return all((digest(folder / name) if (folder / name).is_file() else None) == expected
                for name, expected in plan.observed.items())
 
 
-def _save_state(path, files):
+def _save_state(path, files, history_record=None):
+    if history_record is None and path.is_file():
+        history_record = json.loads(path.read_bytes()).get("history")
+    data = {"version": 1, "files": files, "checked": time.strftime("%Y-%m-%d %H:%M")}
+    if history_record is not None:
+        data["history"] = history_record
     temp = path.with_name("state-" + os.urandom(16).hex() + ".tmp")
     try:
         with temp.open("w", encoding="utf-8") as stream:
-            json.dump({"version": 1, "files": files, "checked": time.strftime("%Y-%m-%d %H:%M")}, stream, indent=2)
+            json.dump(data, stream, indent=2)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temp, path)
@@ -339,13 +416,20 @@ def _save_state(path, files):
         temp.unlink(missing_ok=True)
 
 
-def _stage_download(mod, destination, reserve_bytes, failed, fetcher):
-    source = _open_download(mod.url) if fetcher is None else BytesIO(fetcher(mod.url, MAX_FILE))
+def _stage_download(mod, destination, reserve_bytes, failed, fetcher, pack=None, local=None):
+    if local is not None:
+        source = (local / mod.name).open("rb")
+    elif fetcher is not None:
+        source = BytesIO(fetcher(mod.url, MAX_FILE))
+    elif pack is None:
+        source = _open_download(mod.url)
+    else:
+        source = _open_download(mod.url, origin=urlsplit(pack.manifest_url).hostname)
     checksum = hashlib.sha256()
     size = 0
     with source as response, destination.open("wb") as output:
         while not failed.is_set():
-            chunk = _read_download(response, MIB)
+            chunk = response.read(MIB) if local is not None else _read_download(response, MIB)
             if not chunk:
                 break
             size += len(chunk)
@@ -358,16 +442,29 @@ def _stage_download(mod, destination, reserve_bytes, failed, fetcher):
         raise Error(mod.name + " failed its SHA-256 check. Nothing was installed.")
 
 
-def install(plan, fetcher=None, running=None, progress=None):
+def install(plan, fetcher=None, running=None, progress=None, *, restoring=False):
+    from . import history, packs
     from .runtime import game_running
     with _install_lock:
+        if plan.pack is not None and packs.locked():
+            raise Error("This copy of Sheikah Mods is locked to Sheikah Sanctuary.")
+        if plan.pack is not None and plan.pack not in packs.catalog(plan.game_dir):
+            raise Error("The registered pack changed. Check it again before applying updates.")
         if (running or game_running)(plan.game_dir):
             raise Error("Close A Township Tale before installing or updating Sheikah Mods.")
         if not _unchanged(plan):
             raise Error("Your mods changed after the check. Check again before applying updates.")
+        saved = history.read(plan.state_raw)
+        local = None
+        if restoring:
+            local, expected = history.snapshot(plan.game_dir, plan.pack, saved)
+            if history.describe(expected) != history.describe(plan.mods):
+                raise Error("The saved version changed. Review it again before restoring.")
+        elif saved.pinned:
+            raise Error("Choose Resume updates before installing a newer version.")
         folder = Path(plan.game_dir, plan.storage)
         folder.mkdir(parents=True, exist_ok=True)
-        root = Path(plan.game_dir, STATE_DIR)
+        root = packs.state_root(plan.game_dir, packs.pack_id(plan.pack))
         work = root / "transactions" / os.urandom(16).hex()
         work.mkdir(parents=True)
         previous = work / "previous"
@@ -376,6 +473,7 @@ def install(plan, fetcher=None, running=None, progress=None):
         files = {name: dict(entry) for name, entry in old_files.items()}
         staged, placed, original_backups = [], [], []
         preserve_work = False
+        captured = None
         try:
             downloads = [change for change in plan.changes if change.mod is not None]
             budget_lock = threading.Lock()
@@ -383,8 +481,9 @@ def install(plan, fetcher=None, running=None, progress=None):
             failure = None
             downloaded_bytes = 0
             completed = 0
+            operation = "Reading saved files" if restoring else "Downloading"
             if progress and downloads:
-                progress("Downloading 0 of %d" % len(downloads))
+                progress(f"{operation} 0 of {len(downloads)}")
 
             def reserve_bytes(size):
                 nonlocal downloaded_bytes
@@ -398,13 +497,13 @@ def install(plan, fetcher=None, running=None, progress=None):
                 if failed.is_set():
                     return
                 try:
-                    _stage_download(change.mod, work / change.name, reserve_bytes, failed, fetcher)
+                    _stage_download(change.mod, work / change.name, reserve_bytes, failed, fetcher, plan.pack, local)
                     with budget_lock:
                         if failed.is_set():
                             return
                         completed += 1
                         if progress:
-                            progress("Downloading %d of %d" % (completed, len(downloads)))
+                            progress(f"{operation} {completed} of {len(downloads)}")
                 except Exception as error:
                     with budget_lock:
                         if failure is None:
@@ -425,6 +524,9 @@ def install(plan, fetcher=None, running=None, progress=None):
                     shutil.copyfile(backup, work / change.name)
             if (running or game_running)(plan.game_dir) or not _unchanged(plan):
                 raise Error("The game started or your mods changed during the download. Nothing was installed; check again.")
+            captured = history.capture(plan, folder, saved, old_files)
+            if captured is not None and ((running or game_running)(plan.game_dir) or not _unchanged(plan)):
+                raise Error("The game started or your mods changed while saving the previous version.")
             if progress:
                 progress("Installing verified mods...")
             for change in plan.changes:
@@ -441,7 +543,7 @@ def install(plan, fetcher=None, running=None, progress=None):
                     if digest(backup) != change.current:
                         raise Error("A local mod changed while making its backup. Check again.")
                     original_backups.append(backup)
-                    if plan.storage == "Mods":
+                    if plan.storage == "Mods" and (not restoring or not entry.get("original")):
                         entry.update(original=relative, original_sha256=change.current)
                 if change.current is not None:
                     os.replace(live, previous / change.name)
@@ -454,7 +556,9 @@ def install(plan, fetcher=None, running=None, progress=None):
                     files[change.name.lower()] = entry
                 else:
                     files.pop(change.name.lower(), None)
-            _save_state(state_path(plan.game_dir), files)
+            previous_id = captured or (saved.previous if not restoring else None)
+            updated = history.History(history.describe(plan.mods), previous_id, restoring)
+            _save_state(state_path(plan.game_dir, plan.pack), files, updated.record())
         except Exception as error:
             if progress:
                 progress("Restoring previous files...")
@@ -475,11 +579,15 @@ def install(plan, fetcher=None, running=None, progress=None):
                             % (", ".join(problems), work)) from error
             for backup in original_backups:
                 backup.unlink(missing_ok=True)
+            if captured is not None:
+                shutil.rmtree(history.directory(plan.game_dir, plan.pack) / captured, ignore_errors=True)
             if isinstance(error, Error):
                 raise
             raise Error("The update couldn't be saved (%s). Previous files were restored." % error) from error
         finally:
             if not preserve_work:
                 shutil.rmtree(work, ignore_errors=True)
-        _deferred.pop(plan.game_dir, None)
-        return inspect(plan.game_dir, plan.mods)
+        _deferred.pop((plan.game_dir, plan.pack), None)
+        if saved.previous and saved.previous != previous_id:
+            shutil.rmtree(history.directory(plan.game_dir, plan.pack) / saved.previous, ignore_errors=True)
+        return _inspect_files(plan.game_dir, plan.mods, False, plan.pack, pinned=restoring)

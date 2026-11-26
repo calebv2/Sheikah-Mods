@@ -160,7 +160,7 @@ class LocalTLSTests(unittest.TestCase):
         for location in ('https://different.example.test/A.dll', 'http://' + core.HOST + '/A.dll'):
             with self.subTest(location=location):
                 with self.server(redirects={'/manifest.json': location}) as (requests, connections):
-                    with self.assertRaisesRegex(core.Error, 'only downloads over HTTPS'):
+                    with self.assertRaisesRegex(core.Error, 'valid HTTPS download URL'):
                         core.fetch(core.MANIFEST_URL, 1024)
                 self.assertEqual(requests, ['/manifest.json'])
                 self.assertEqual(len(connections), 1)

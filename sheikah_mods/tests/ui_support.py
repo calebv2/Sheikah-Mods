@@ -1,5 +1,6 @@
 """Launcher stand-ins for independent UI tests and a sample preview."""
 from contextlib import contextmanager
+import gc
 import importlib
 from pathlib import Path
 import subprocess
@@ -9,6 +10,8 @@ from types import ModuleType
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from sheikah_mods import compatibility, history, switching
+
 shared = ModuleType('tavern_shared')
 shared.__path__ = []
 theme = ModuleType('tavern_shared.theme')
@@ -20,6 +23,20 @@ with patch.dict(sys.modules, {'tavern_shared': shared, 'tavern_shared.theme': th
     client = importlib.import_module('sheikah_mods.client')
 window = client.window
 core = client.core
+
+
+def make_root(test):
+    test.root = tk.Tk()
+    test.root.withdraw()
+
+    def cleanup():
+        test.root.destroy()
+        del test.root
+        # Tcl interpreters must be collected here before download threads run.
+        gc.collect()
+
+    test.addCleanup(cleanup)
+    return test.root
 
 
 @contextmanager

@@ -1,95 +1,64 @@
 # Sheikah Mods
 
-A standalone TavernLauncher addon for installing and updating the Sheikah Sanctuary client mods.
-Version **1.2.3**. It runs independently of the Modpacks addon.
-Its windows use TavernLauncher's original color scheme and shared theme controls.
-
-Version 1.2.0 adds next-launch status, a smart action button, live progress, and friendly recovery controls.
-
-The mod list is fixed in the addon:
-https://att.aservertown.fans/manifest.json
-
-The list is downloaded fresh when checked; its file names and SHA-256 hashes are not frozen into the addon.
-The list provides no optional-mod or dependency information. Sheikah Mods installs all listed DLLs.
+A TavernLauncher addon for installing, updating, and switching client mod packs for A Township Tale. Sheikah Sanctuary is included, and players can add packs from other servers.
 
 ## Install
 
-1. Install and configure TavernLauncher and MelonLoader. Start the game once so its `Mods` folder exists.
-2. Extract the `sheikah_mods` folder into TavernLauncher's `addons` folder.
-3. Enable **Sheikah Mods** in **Addons**, save, and restart TavernLauncher.
-4. Review the listed changes and choose **Install mods**.
+1. Close TavernLauncher and A Township Tale.
+2. Extract the `sheikah_mods` folder into TavernLauncher's `addons` folder. Allow it to replace files from an earlier release.
+3. Enable **Sheikah Mods** in **Addons**, save, and restart TavernLauncher. Install MelonLoader and start the game once if its `Mods` folder does not exist yet.
+4. Open **Sheikah Mods** beside **Mods** in the launcher. Use a single updater for any given set of DLLs.
 
-Use one updater for the Sheikah files. Disable the old Modpacks addon if it manages these same mods.
-Existing Modpacks folders and settings are not migrated or removed automatically.
+Your existing Sheikah files and backups carry over from v1.2.2.
 
-## Everyday use
+## Add a pack
 
-- A permanent **Sheikah Mods** button beside the launcher's **Mods** tools opens the mod list,
-  including installed mods, available changes, and installed versions when available.
-- The button remains available while background checks run. Checks begin when the launcher opens.
-- A status beside the launch controls follows the selected address: **Ready for Sheikah**, required
-  setup/updates, or **Sheikah mods will be parked for this server**. Address lookups run in the background.
-- The viewer's main button becomes **Install mods**, **Update mods**, **All up to date**, or **Retry**.
-  It stays disabled while work is in progress or everything is up to date.
-- Progress shows completed downloads, such as **Downloading 8 of 49**, and **Switching mods...** with file
-  counts. The launcher stays responsive and the progress appears in the viewer and launch wait window.
-- Errors explain the next step and offer **Retry**. Technical details remain in the launcher log.
-- If the mod site is unavailable, the saved manifest is used to verify installed file hashes. A complete
-  matching set is reported as usable offline; missing or different files require reconnecting to finish setup.
-  Retry always attempts a fresh check, so cached data is never presented as the newest online list.
-- **Check now** gets a fresh list and lets you reconsider skipped changes.
-- Startup and game launches share checks from the last two minutes and share requests already in progress.
-- Skipping remembers those exact changes for this launcher session.
-- Close the game before installing or updating. Accepted updates finish before a launch continues.
-- Joining `att.aservertown.fans:1757` loads Sheikah's mods into `Mods`. Its resolved IP or an alias for
-  the same address and port is recognized too.
-- Joining another server or launching **Main Menu** parks Sheikah's files in `SheikahMods/parked`
-  next to the game. Returning to Sheikah moves them back automatically. No mod files are deleted by switching.
-- Unrelated mods stay in `Mods`. If Sheikah previously replaced a local DLL, the local copy is restored
-  for other servers. Edits made to that local copy while away are saved and restored on later switches.
-- While parked, updates are installed in the holding folder, so they do not leak back into other servers.
-- Files already installed before this version are recognized by their manifest hashes on the first switch.
-  A matching filename alone is not enough to move an unrecognized local DLL.
-- Close the game between servers and start the next server from TavernLauncher. Mods cannot be swapped
-  inside a running game. Joining Sheikah from an in-game main-menu board cannot load its parked DLLs.
+Choose **Add pack → Import share link** and paste a link from the pack owner. Review the publisher, server, and DLL list before selecting **Add pack**. You can also enter the pack name, game server host or IP, port, and HTTPS manifest URL directly.
 
-## File safety
+To download files ahead of time, select the pack and use **Check now** followed by **Install mods**. Use packs from publishers you trust, since the DLLs run as game code.
 
-- Downloads use HTTPS from `att.aservertown.fans`, with SHA-256 verification before anything is installed.
-- Mod-list and DLL downloads use the included Mozilla certificate store, with certificate expiry
-  and hostname validation enabled. No extra Python package is required.
-- DLLs stream to disk with a combined download limit of 512 MiB per update.
-- A different local DLL is shown as **REPLACE**. Applying saves the local copy under
-  `SheikahMods/backups` next to the game before replacing it.
-- When the site removes a mod, only an unchanged copy installed by this addon is removed. If Sheikah Mods
-  replaced a pre-existing local DLL, its original copy is restored instead. While parked, the original
-  already in `Mods` is left alone. Edited files are kept.
-- Unrelated DLLs in `Mods`, configuration files, and `UserData` are left alone.
-- If files change during downloading, the update stops. Failed installations roll back previous files.
-  If rollback cannot finish, the error identifies recovery copies under `SheikahMods/transactions`.
-- Failed server switches stop the launch and roll back previous files and saved records. If rollback cannot
-  finish, the error gives the remaining file locations and transaction records.
-- A damaged ownership record stops updates rather than guessing which files belong to the addon.
+Under **Pack options**, choose **Edit pack** to change a custom pack's details without losing its installed files. **Remove pack** previews what will be parked or restored. Removing a pack keeps its downloads and saved versions available if you add the same server and manifest URL later.
 
-## Scope
+## Choose when packs switch
 
-Sheikah Mods has no custom manifest field, pack creation, rename/delete, zip import/export, editable server assignments,
-pack merging, individual mod toggles, or loose-mod organizer. Server switching is fixed to Sheikah.
-TavernLauncher still handles game patching and
-MelonLoader. This addon does not determine whether an individual server mod is optional.
+- **Automatic** is the default. Joining a registered server through TavernLauncher loads the pack assigned to its host and port. The addon also matches resolved addresses, including when TavernLauncher gives the game an IP instead of the hostname you entered. If multiple packs share that IP and port, join using the registered hostname or switch manually. Unassigned servers and **Main Menu** use your regular mods.
+- **Switch now** applies the selected pack immediately while the game is closed. This turns on manual mode. Your selection stays active on subsequent launches, including Main Menu, until you select another pack or click **Follow server**.
+- **Follow server** returns to automatic matching on the next launch.
+- **Preview launch** shows the active pack, mode, and installed files for both **Join Server** and **Main Menu**. It calls out temporary DLL replacements, missing files, and compatibility notices from the saved manifest.
+- Close the game before installing, updating, or switching. Starting a new game process is required to load different DLLs.
+
+Updates to an inactive pack go into its own holding folder. Switching preserves unrelated mods and restores existing files that an active pack temporarily replaced. Cached manifests let the addon verify a complete installed pack when its site is offline. Each download is checked against its SHA-256 digest before installation.
+
+## Restore a previous version
+
+The updater saves one previous version when it can verify the files already installed. Select the pack and choose **Pack options → Restore previous version** to review and restore those local files. A restored version stays pinned across launches until you choose **Resume updates**. You can restore offline. If a saved file fails verification, the current install is preserved.
+
+## Publish a pack for your server
+
+1. Put the client DLLs you want players to use into a folder.
+2. In **Sheikah Mods → Add pack**, choose **Create manifest from DLLs** and select that folder. You can add a release label and list supported game builds and MelonLoader versions. **Use this installation's versions** copies the detected values if you are publishing from the setup you tested. The addon writes `manifest.json` with the DLL names, SHA-256 hashes, and relative download URLs.
+3. Upload the manifest and its DLLs to the same HTTPS folder. Download URLs and redirects must stay on the manifest hostname. Changing a DLL requires regenerating the manifest.
+4. Register the pack in your launcher, then send players the link from **Pack options → Copy share link**.
+
+A manifest can list up to 300 client DLLs, with a combined download limit of 512 MiB per update. TavernLauncher manages its own voice chat files. Keep those and server-only DLLs out of the pack.
+
+If you edit manifests directly, use the optional `release` string and `compatibility` object alongside `files`. The compatibility object accepts `game_builds` and `melonloader_versions`, each an array of supported versions. Use the exact build identifier from the game's `version` file and numeric MelonLoader versions such as `0.7.3`. These declarations show a warning when the installed version is outside the supported list or cannot be detected. Players can review the warning and choose whether to continue.
 
 ## HTTPS certificates
 
-Keep `cacert.pem` beside `core.py` when installing or packaging the addon. Version 1.2.3 uses
-this bundle for downloads so stale certificates in an individual PC's default store do not change
-the addon's trusted roots. If verification still fails, check the PC's date and time and collect
-the launcher log, which includes the SSL error, OpenSSL version, and local time.
+Keep `cacert.pem` beside `core.py` when installing or packaging the addon.
+If certificate verification still fails, check the affected PC's date and time and install the
+latest addon. The launcher log includes the SSL error, OpenSSL version, and local time.
 
-Certificate bundle provenance, license, and refresh instructions are in
-[sheikah_mods/README.md](sheikah_mods/README.md#https-certificates).
+`cacert.pem` is the unmodified Mozilla CA bundle from
+[certifi 2026.10.23](https://pypi.org/project/certifi/2026.10.23/), distributed under the
+Mozilla Public License 2.0 in `CERTIFI-LICENSE`. Refresh it from a maintained certifi release
+when preparing future addon releases; do not download replacement trust roots at runtime.
+
+- Source wheel: `certifi-2026.10.23-py3-none-any.whl` from PyPI.
+- Wheel SHA-256: `e9b54de76e530bb6cf0ccd036787103acb58fd42ba930ea8bf948ddbaa2f61d1`.
+- Bundle SHA-256: `2ef52ad56b4803e264045c915e55c236cbfa045b84b81efefc218a19eb44bd2b`.
 
 ## Development
 
-From the repository root, run `python -m unittest discover -s sheikah_mods/tests -v`.
-The tests use temporary folders and fake downloads rather than installed game files.
-Run `python sheikah_mods/tests/preview.py` for a sample of the Sheikah Mods update screen.
+Run `python -m unittest discover -s sheikah_mods/tests -v` from the repository root. The tests use temporary folders and fake downloads. Run `python sheikah_mods/tests/preview.py` for a sample of the update screen.

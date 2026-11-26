@@ -1,3 +1,18 @@
+# Sheikah Mods v1.4.0
+
+- Share packs with a link that previews the publisher and DLL list before import.
+- Edit custom packs in place or remove them while retaining downloads and saved versions.
+- Preview the pack and DLLs for Join Server and Main Menu, including conflicts and compatibility notices.
+- Restore a verified previous version offline and keep it pinned until updates are resumed.
+- Let publishers declare supported game builds and MelonLoader versions. Match custom packs when TavernLauncher resolves server hostnames to IPs.
+
+# Sheikah Mods v1.3.0
+
+- Add server-specific packs from HTTPS manifests, with a manifest builder for pack authors.
+- Switch packs directly in the launcher or have the launcher select a pack by server on each launch.
+- Keep each pack's files, saved manifest, and ownership record separate, including packs with overlapping DLL names.
+- Set `sheikah_only` in `pack-policy.json` for a distribution that follows only the built-in Sheikah server.
+
 # Sheikah Mods v1.2.3
 
 - Use an included Mozilla CA bundle for mod-list and DLL downloads to avoid stale certificates in individual Windows or launcher stores. HTTPS certificate, hostname, same-site redirect, and DLL hash checks stay enabled.

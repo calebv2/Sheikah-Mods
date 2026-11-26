@@ -9,7 +9,7 @@ from tkinter import messagebox
 
 import tavern_shared.theme as _theme
 
-from . import core, runtime, switching, ui_state, window
+from . import core, history, packs, runtime, switching, ui_state, window
 
 BUTTON_TEXT = "Sheikah Mods"
 AFTER_TEXTS = ("\U0001f4c1 Mods Folder", "☑ Toggle Mods")
@@ -34,7 +34,7 @@ def _show(root, plan=None, status=None):
         button.configure(text=BUTTON_TEXT)
     opened = getattr(root, "_sheikah_window", None)
     if opened is not None and opened.winfo_exists():
-        if plan is not None and plan.game_dir != opened.game_dir:
+        if plan is not None and (plan.game_dir != opened.game_dir or plan.pack != _selected_pack(root)):
             plan = None
         opened.show(plan, status, getattr(root, "_sheikah_pending", False), getattr(root, "_sheikah_issue", None))
     _render_next_status(root)
@@ -49,21 +49,40 @@ def _set_progress(root, text):
 
 
 def _render_next_status(root):
+    opened = getattr(root, "_sheikah_window", None)
+    if opened is not None and opened.winfo_exists():
+        route = getattr(root, "_sheikah_next_pack_name", None)
+        if getattr(root, "_sheikah_route_error", False):
+            opened.show_next("Next Join Server · Check the server address")
+        else:
+            opened.show_next(f"Next Join Server · {route}" if route else "Next Join Server · Checking address")
     label = getattr(root, "_sheikah_next_status", None)
     if label is None:
         return
     progress = getattr(root, "_sheikah_progress", None) if getattr(root, "_sheikah_pending", False) else None
-    text, color = ui_state.next_launch(getattr(root, "_sheikah_plan", None),
+    plan = getattr(root, "_sheikah_plan", None)
+    issue = getattr(root, "_sheikah_issue", None)
+    if _selected_pack(root) is not None or (plan is not None and plan.pack is not None):
+        plan, issue = None, None
+    text, color = ui_state.next_launch(plan,
         getattr(root, "_sheikah_target_match", None), progress,
-        getattr(root, "_sheikah_issue", None), getattr(root, "_sheikah_route_error", False))
+        issue, getattr(root, "_sheikah_route_error", False))
+    target = getattr(root, "_sheikah_target_pack", None)
+    if not progress and target is not None:
+        mode = 'Manual pack' if getattr(root, '_sheikah_manual', False) else 'Pack on launch'
+        text, color = f"{mode} · {target.name}", 'MUTED'
     label.configure(text="Sheikah Mods · " + text, fg=getattr(_theme, color))
 
 
 def _game_changed(root, *unused):
+    _destination_changed(root)
     plan = getattr(root, '_sheikah_plan', None)
     game_dir = _game_dir(root)
     if plan is not None and plan.game_dir == game_dir:
         return
+    opened = getattr(root, "_sheikah_window", None)
+    if opened is not None and opened.winfo_exists() and opened.game_dir != game_dir:
+        opened.destroy()
     root._sheikah_plan = None
     root._sheikah_issue = None
     _show(root, status='Check mods for the selected game.')
@@ -82,11 +101,11 @@ def _destination_changed(root, *unused):
         root.after_cancel(pending)
     root._sheikah_route_timer = None
     root._sheikah_route_error = False
+    root._sheikah_target_pack = None
+    root._sheikah_next_pack_name = None
+    root._sheikah_manual = False
     try:
-        host = root.v_ip.get().strip().rstrip('.').casefold() or '127.0.0.1'
-        port = int(str(root.v_port.get()).strip() or switching.SERVER_PORT)
-        if not 1 <= port <= 65535:
-            raise ValueError()
+        host, port = _launcher_target(root)
     except AttributeError:
         root._sheikah_target_match = None
         _render_next_status(root)
@@ -95,25 +114,53 @@ def _destination_changed(root, *unused):
         root._sheikah_route_error = True
         _render_next_status(root)
         return
-    if host == core.HOST or port != switching.SERVER_PORT or host in ('127.0.0.1', 'localhost', '::1'):
-        root._sheikah_target_match = host == core.HOST and port == switching.SERVER_PORT
+    game_dir = _game_dir(root)
+    try:
+        available = packs.catalog(game_dir) if game_dir is not None else (packs.SHEIKAH,)
+        active, manual = switching.selection(game_dir) if game_dir is not None else (packs.SHEIKAH_ID, False)
+        root._sheikah_manual = manual and not packs.locked()
+    except core.Error:
+        root._sheikah_route_error = True
+        _render_next_status(root)
+        return
+    if root._sheikah_manual:
+        exact = next((item for item in available if item.id == active), None)
+    else:
+        exact = next((item for item in available if item.target == (host, port)), None)
+    if root._sheikah_manual or exact or not switching.needs_lookup((host, port), available):
+        root._sheikah_target_match = exact == packs.SHEIKAH
+        root._sheikah_next_pack_name = exact.name if exact else "Regular mods"
+        if exact is not None and (exact != packs.SHEIKAH or root._sheikah_manual):
+            root._sheikah_target_pack = exact
         _render_next_status(root)
         return
     root._sheikah_target_match = None
     _render_next_status(root)
 
-    def done(match, error):
+    def done(pack_id, error):
         if generation != root._sheikah_route_generation:
             return
-        root._sheikah_target_match = match
+        item = next((item for item in available if item.id == pack_id), None)
+        root._sheikah_target_match = item == packs.SHEIKAH
+        root._sheikah_target_pack = item if item != packs.SHEIKAH else None
+        root._sheikah_next_pack_name = item.name if item else "Regular mods"
         root._sheikah_route_error = error is not None
         _render_next_status(root)
 
     def resolve():
         root._sheikah_route_timer = None
-        window.background(root, lambda: switching.is_sheikah((host, port)), done)
+        window.background(root, lambda: switching.route(game_dir, (host, port)) if game_dir is not None
+                          else packs.SHEIKAH_ID if switching.is_sheikah((host, port)) else packs.REGULAR_ID, done)
 
     root._sheikah_route_timer = root.after(250, resolve)
+
+
+def _launcher_target(root):
+    host = packs.normalize_host(root.v_ip.get()) or '127.0.0.1'
+    port = int(str(root.v_port.get()).strip() or switching.SERVER_PORT)
+    if not 1 <= port <= 65535:
+        raise ValueError("The launcher has an invalid server port.")
+    return host, port
 
 
 def _ensure_status(root):
@@ -157,6 +204,11 @@ def _game_dir(root):
     return str(Path(exe).resolve().parent) if exe and Path(exe).is_file() else None
 
 
+def _selected_pack(root):
+    opened = getattr(root, "_sheikah_window", None)
+    return opened.selected_pack() if opened is not None and opened.winfo_exists() else None
+
+
 def _prompt_parent(root):
     waiting = getattr(root, "_sheikah_wait_dialog", None)
     if waiting is not None:
@@ -174,7 +226,7 @@ def _checked(root, result, error, prompt, force):
             _log(str(error), "warn")
             _show(root, getattr(root, "_sheikah_plan", None), ui_state.friendly_error(error, getattr(root, "_sheikah_plan", None)))
             return
-        if _game_dir(root) != result.game_dir:
+        if _game_dir(root) != result.game_dir or result.pack != _selected_pack(root):
             _show(root, status="The game path changed. Choose Check now for the selected game.")
             return
         root._sheikah_plan = result
@@ -183,6 +235,8 @@ def _checked(root, result, error, prompt, force):
         _show(root, result, ui_state.offline_message(result) if result.offline else "%d mods ready; %d changes available." % (len(result.ready), len(result.changes)))
         if result.offline:
             _log(ui_state.offline_message(result), 'warn')
+        elif result.pinned:
+            _show(root, result, "Restored version is pinned. Use Pack options → Resume updates to switch back to the publisher's releases.")
         elif result.changes and prompt and (force or not core.deferred(result)):
             if window.ask_updates(_prompt_parent(root), result):
                 _install(root, result)
@@ -207,12 +261,13 @@ def check(root, game_dir, force=False, prompt=True):
         return
     root._sheikah_pending = True
     root._sheikah_issue = None
-    _set_progress(root, "Checking the Sheikah Sanctuary mod list...")
-    window.background(root, lambda: core.inspect(game_dir, force=force),
+    pack = _selected_pack(root)
+    _set_progress(root, f"Checking the {(pack or packs.SHEIKAH).name} mod list...")
+    window.background(root, lambda: core.inspect(game_dir, force=force, pack=pack),
                       lambda result, error: _checked(root, result, error, prompt, force))
 
 
-def _installed(root, result, error):
+def _installed(root, result, error, restoring=False):
     root._sheikah_pending = False
     recheck = getattr(root, '_sheikah_recheck_dir', None)
     root._sheikah_recheck_dir = None
@@ -221,6 +276,12 @@ def _installed(root, result, error):
         check(root, recheck, prompt=False)
         return
     if error:
+        if restoring:
+            _show(root, getattr(root, "_sheikah_plan", None), "Could not restore the saved version.")
+            opened = getattr(root, "_sheikah_window", None)
+            parent = opened if opened is not None and opened.winfo_exists() else root
+            messagebox.showerror(core.NAME, str(error), parent=parent)
+            return
         root._sheikah_issue = error
         root._sheikah_retry = 'check' if any(word in str(error) for word in ('changed', 'invalid', 'Recovery copies', 'SHA-256')) else 'install'
         plan = getattr(root, "_sheikah_plan", None)
@@ -229,16 +290,18 @@ def _installed(root, result, error):
         return
     root._sheikah_plan = result
     root._sheikah_issue = None
-    _show(root, result, "All %d Sheikah mods are ready. Changes apply when the game starts." % len(result.mods))
+    status = ("Restored the saved version and paused updates for this pack." if result.pinned
+              else "All %d pack mods are ready for the next game launch." % len(result.mods))
+    _show(root, result, status)
     _log("All %d listed mods are ready." % len(result.mods), "ok")
 
 
-def _install(root, plan):
+def _install(root, plan, restoring=False):
     root._sheikah_pending = True
     root._sheikah_issue = None
-    _set_progress(root, "Preparing Sheikah mods...")
-    window.background(root, lambda emit: core.install(plan, progress=emit),
-                      lambda result, error: _installed(root, result, error),
+    _set_progress(root, "Preparing saved version..." if restoring else "Preparing pack mods...")
+    window.background(root, lambda emit: core.install(plan, progress=emit, restoring=restoring),
+                      lambda result, error: _installed(root, result, error, restoring),
                       progress=lambda text: _set_progress(root, text))
 
 
@@ -247,7 +310,9 @@ def _apply_click(root):
     if getattr(root, "_sheikah_pending", False) or getattr(root, "_sheikah_launching", False):
         return
     game_dir = root._sheikah_window.game_dir
-    if plan is not None and plan.game_dir != game_dir:
+    if plan is not None and (plan.game_dir != game_dir or plan.pack != _selected_pack(root)):
+        plan = None
+    if plan is not None and plan.pinned:
         return
     if getattr(root, "_sheikah_issue", None) is not None or plan is None or plan.offline:
         if plan is not None and getattr(root, "_sheikah_retry", 'check') == 'install':
@@ -272,14 +337,207 @@ def _open(root):
             opened.lift()
             return
         opened.destroy()
-    root._sheikah_window = window.SheikahWindow(root, game_dir,
-        lambda: check(root, game_dir, force=True), lambda: _apply_click(root))
+    try:
+        root._sheikah_window = window.SheikahWindow(root, game_dir,
+            lambda: check(root, game_dir, force=True), lambda: _apply_click(root),
+            on_select=lambda: _pack_selected(root, game_dir),
+            on_switch=lambda: _manual_switch(root, game_dir),
+            on_automatic=lambda: _resume_automatic(root, game_dir),
+            on_add=lambda: _add_pack(root, game_dir),
+            on_preview=lambda: _preview_launch(root, game_dir),
+            options=(
+                ('Copy share link', lambda: _copy_link(root)),
+                ('Edit pack', lambda: _add_pack(root, game_dir, _selected_pack(root))),
+                ('Remove pack', lambda: _remove_pack(root, game_dir)),
+                ('Restore previous version', lambda: _restore_version(root, game_dir)),
+                ('Resume updates', lambda: _resume_updates(root, game_dir)),
+            ))
+    except core.Error as error:
+        messagebox.showerror(core.NAME, str(error), parent=root)
+        return
     plan = getattr(root, "_sheikah_plan", None)
     if plan is not None and plan.game_dir != game_dir:
         plan = None
-    _show(root, plan, "Checking the Sheikah Sanctuary mod list..."
+    _show(root, plan, "Checking the mod list..."
           if getattr(root, "_sheikah_pending", False) else None)
     check(root, game_dir, prompt=False)
+
+
+def _pack_selected(root, game_dir):
+    root._sheikah_plan = None
+    root._sheikah_issue = None
+    _show(root, status="Checking the selected pack...")
+    check(root, game_dir, prompt=False)
+
+
+def _add_pack(root, game_dir, original=None):
+    if getattr(root, "_sheikah_pending", False) or getattr(root, "_sheikah_launching", False):
+        return
+    dialog = window.AddPackDialog(root._sheikah_window, game_dir, original)
+    if dialog.result is not None:
+        root._sheikah_window.refresh_packs(dialog.result.id)
+        _destination_changed(root)
+        _pack_selected(root, game_dir)
+
+
+def _copy_link(root):
+    opened = root._sheikah_window
+    link = packs.share_link(_selected_pack(root) or packs.SHEIKAH)
+    opened.clipboard_clear()
+    opened.clipboard_append(link)
+    _show(root, getattr(root, "_sheikah_plan", None), "Share link copied. Players can paste it in Add pack → Import share link.")
+
+
+def _remove_pack(root, game_dir):
+    pack = _selected_pack(root)
+    if pack is None or getattr(root, "_sheikah_pending", False) or getattr(root, "_sheikah_launching", False):
+        return
+    opened = root._sheikah_window
+    try:
+        active, _ = switching.selection(game_dir)
+        files = core._read_state(core._state_bytes(game_dir, pack))
+        details = [f"{pack.name} will be removed from the pack list and automatic matching.",
+                   "Downloaded files and version history stay available in the pack's holding folder.",
+                   "Add the same server address and manifest URL later to reuse them."]
+        if active == pack.id:
+            originals = sorted(name for name, entry in files.items() if entry.get("original"))
+            details += ["", "The active pack will be parked and regular mods will become active.",
+                        f"{len(originals)} original DLLs will be restored.", *originals]
+        if not window.review_text(opened, "Remove pack", details, "Remove pack"):
+            return
+    except (core.Error, OSError) as error:
+        messagebox.showerror(core.NAME, str(error), parent=opened)
+        return
+    root._sheikah_pending = True
+    _set_progress(root, f"Removing {pack.name}...")
+
+    def done(result, error):
+        root._sheikah_pending = False
+        viewer = getattr(root, "_sheikah_window", None)
+        if viewer is not opened or not opened.winfo_exists():
+            _destination_changed(root)
+            return
+        if error:
+            messagebox.showerror(core.NAME, str(error), parent=opened)
+            _show(root, getattr(root, "_sheikah_plan", None), "The pack could not be removed.")
+        else:
+            opened.refresh_packs(packs.SHEIKAH_ID)
+            _pack_selected(root, game_dir)
+        _destination_changed(root)
+
+    window.background(root, lambda emit: packs.remove(game_dir, pack, progress=emit), done,
+                      progress=lambda text: _set_progress(root, text))
+
+
+def _launch_details(game_dir, target):
+    available = {item.id: item for item in packs.catalog(game_dir)}
+    active, manual = switching.selection(game_dir)
+    if packs.locked():
+        manual = False
+    details = [f"Active files: {available[active].name if active in available else 'Regular mods'}",
+               "Mode: Manual selection" if manual else "Mode: Follow server"]
+    projected = {}
+    for label, address in (("Join Server", target), ("Main Menu", None)):
+        details.append("")
+        if label == "Join Server" and address is None:
+            details.append("Join Server · Set a valid server address in TavernLauncher.")
+            continue
+        try:
+            pack_id = switching.route(game_dir, address)
+            item = available.get(pack_id)
+            details.append(f"{label} · {item.name if item else 'Regular mods'}")
+            if pack_id in projected:
+                details.append(f"Same files as {projected[pack_id]}.")
+                continue
+            projected[pack_id] = label
+            files = switching.launch_files(game_dir, pack_id, None if item == packs.SHEIKAH else item)
+        except (core.Error, OSError) as error:
+            details.append(str(error))
+            continue
+        for title, values in (("Pack DLLs ready", files.pack), ("Regular DLLs also loaded", files.regular),
+                              ("Regular DLLs temporarily replaced", files.conflicts),
+                              ("Missing or out of date in the saved manifest", files.pending),
+                              ("Needs review", files.warnings)):
+            if values or title == "Pack DLLs ready":
+                details.append(f"{title} ({len(values)})")
+                details.extend(f"  {value}" for value in values)
+    return details
+
+
+def _preview_launch(root, game_dir):
+    if getattr(root, "_sheikah_pending", False) or getattr(root, "_sheikah_launching", False):
+        return
+    try:
+        target = _launcher_target(root)
+    except (AttributeError, ValueError):
+        target = None
+    opened = root._sheikah_window
+    try:
+        details = window.run_waiting(root, lambda: _launch_details(game_dir, target), "Preparing launch preview...")
+        if opened.winfo_exists():
+            window.review_text(opened, "Launch preview", details)
+    except core.Cancelled:
+        pass
+    except (core.Error, OSError) as error:
+        messagebox.showerror(core.NAME, str(error), parent=opened)
+
+
+def _restore_version(root, game_dir):
+    if getattr(root, "_sheikah_pending", False) or getattr(root, "_sheikah_launching", False):
+        return
+    pack = _selected_pack(root)
+    opened = root._sheikah_window
+    try:
+        if runtime.game_running(game_dir):
+            raise core.Error("Close A Township Tale before restoring a saved version.")
+        plan = window.run_waiting(root, lambda: core.restore_plan(game_dir, pack), "Reading saved version...")
+        if window.ask_updates(opened, plan, restoring=True):
+            _install(root, plan, restoring=True)
+    except core.Cancelled:
+        pass
+    except (core.Error, OSError) as error:
+        messagebox.showerror(core.NAME, str(error), parent=opened)
+
+
+def _resume_updates(root, game_dir):
+    if getattr(root, "_sheikah_pending", False) or getattr(root, "_sheikah_launching", False):
+        return
+    try:
+        history.resume(game_dir, _selected_pack(root))
+        check(root, game_dir, force=True, prompt=False)
+    except (core.Error, OSError) as error:
+        messagebox.showerror(core.NAME, str(error), parent=root._sheikah_window)
+
+
+def _manual_switch(root, game_dir):
+    if getattr(root, "_sheikah_pending", False) or getattr(root, "_sheikah_launching", False):
+        return
+    pack = _selected_pack(root)
+    root._sheikah_launching = True
+    try:
+        if runtime.game_running(game_dir):
+            raise core.Error("Close A Township Tale before switching server mods.")
+        plan = _prepare_pack(root, game_dir, True, pack, manual=True)
+        _switch_profile(root, game_dir, pack is None, True, plan.mods, pack=pack, manual=True)
+    except core.Cancelled:
+        pass
+    except (OSError, core.Error) as error:
+        messagebox.showerror(core.NAME, str(error), parent=root._sheikah_window)
+    finally:
+        root._sheikah_launching = False
+        _show(root, getattr(root, "_sheikah_plan", None))
+        _destination_changed(root)
+
+
+def _resume_automatic(root, game_dir):
+    if getattr(root, "_sheikah_pending", False) or getattr(root, "_sheikah_launching", False):
+        return
+    try:
+        switching.resume_automatic(game_dir)
+        _show(root, getattr(root, "_sheikah_plan", None), "The next launch will use the pack assigned to its server.")
+    except (OSError, core.Error) as error:
+        messagebox.showerror(core.NAME, str(error), parent=root._sheikah_window)
+    _destination_changed(root)
 
 
 def _is_game(args):
@@ -297,14 +555,17 @@ def _is_game(args):
         return False
 
 
-def _switch_profile(root, game_dir, sheikah, main, mods=None):
+def _switch_profile(root, game_dir, sheikah, main, mods=None, *, pack=None, manual=None):
     previous = getattr(root, '_sheikah_plan', None)
 
     def work(emit=None):
-        moved = switching.switch(game_dir, sheikah, mods, progress=emit)
-        known = tuple(mods) if mods is not None else switching.cached_manifest(game_dir)
-        plan = core.inspect(game_dir, mods=known) if known else None
-        if plan is not None and previous is not None and previous.offline and previous.mods == plan.mods:
+        if pack is None and manual is None:
+            moved = switching.switch(game_dir, sheikah, mods, progress=emit)
+        else:
+            moved = switching.switch_pack(game_dir, packs.pack_id(pack), mods, progress=emit, manual=manual)
+        known = mods if mods is not None else switching.cached_manifest(game_dir, pack)
+        plan = core.inspect(game_dir, mods=known, pack=pack) if known else None
+        if plan is not None and previous is not None and previous.offline and previous.pack == plan.pack and previous.mods == plan.mods:
             plan.offline = True
         return moved, plan
 
@@ -314,12 +575,54 @@ def _switch_profile(root, game_dir, sheikah, main, mods=None):
         moved, plan = window.run_waiting(root, work, "Switching mods...", progress=lambda text: _set_progress(root, text))
     else:
         moved, plan = work()
-    message = ("Sheikah mods loaded for %s:%d (%d moved)." % (core.HOST, switching.SERVER_PORT, len(moved))
-               if sheikah else "Sheikah mods parked for this launch (%d moved)." % len(moved))
+    message = (f"{(pack or packs.SHEIKAH).name} is active ({len(moved)} files moved)."
+               if sheikah or pack is not None else f"Regular mods are active ({len(moved)} files moved).")
     _log(message, "info")
     if main:
         root._sheikah_plan = plan
         _show(root, plan, ui_state.offline_message(plan) if plan is not None and plan.offline else message)
+
+
+def _prepare_pack(root, game_dir, main, pack=None, *, manual=False):
+    name = (pack or packs.SHEIKAH).name
+
+    def inspect():
+        return core.inspect(game_dir) if pack is None else core.inspect(game_dir, pack=pack)
+
+    try:
+        plan = window.run_waiting(root, inspect, f"Checking {name}...") if main else inspect()
+    except core.Cancelled:
+        raise
+    except core.Error as error:
+        if pack is not None or manual or isinstance(error, core.Offline):
+            raise
+        _log("Couldn't check before launching; using installed mods. " + str(error), "warn")
+        return None
+    if main:
+        root._sheikah_plan = plan
+        root._sheikah_issue = core.Offline('offline') if plan.offline else None
+        _show(root, plan, ui_state.offline_message(plan) if plan.offline else None)
+    if plan.offline and not ui_state.usable(plan):
+        raise core.Offline("Required mods do not match the saved list.")
+    if plan.pinned and not ui_state.usable(plan):
+        raise core.Error("The restored version is missing or has edited files. Restore another saved version or choose Resume updates.")
+    if plan.warnings:
+        if not main:
+            raise core.Error("Open Sheikah Mods in TavernLauncher to review compatibility before launching.")
+        if not window.review_text(_prompt_parent(root), f"{name} compatibility", plan.warnings,
+                                  "Switch anyway" if manual else "Launch anyway"):
+            raise core.Cancelled("Pack switch cancelled." if manual else "Launch cancelled.")
+    if not plan.pinned and not plan.offline and plan.changes and (manual or not core.deferred(plan)):
+        if not main:
+            raise core.Error("Open Sheikah Mods in the launcher to review the available changes first.")
+        if window.ask_updates(_prompt_parent(root), plan, launching=not manual):
+            return window.run_waiting(root, lambda emit: core.install(plan, progress=emit),
+                                      f"Preparing {name}...", progress=lambda text: _set_progress(root, text))
+        if manual:
+            raise core.Cancelled("Pack switch cancelled.")
+        core.defer(plan)
+        _log("Updates skipped; launching with installed mods.", "warn")
+    return plan
 
 
 def before_launch(args):
@@ -341,38 +644,24 @@ def before_launch(args):
         elif getattr(root, "_sheikah_pending", False):
             raise core.Error("Sheikah Mods is still working. Launch again when it finishes.")
         target = switching.target_from_args(args)
-        if target is not None and target[0] != core.HOST and target[1] == switching.SERVER_PORT and main:
-            sheikah = window.run_waiting(root, lambda: switching.is_sheikah(target), "Identifying the server's mods...")
+        try:
+            hint = _launcher_target(root) if main else None
+        except (AttributeError, ValueError):
+            hint = None
+
+        def resolve():
+            return switching.route(game_dir, target, hint=hint)
+
+        if main and switching.needs_lookup(target, packs.catalog(game_dir)):
+            id = window.run_waiting(root, resolve, "Identifying the server's mods...")
         else:
-            sheikah = switching.is_sheikah(target)
-        if not sheikah:
+            id = resolve()
+        if id == packs.REGULAR_ID:
             _switch_profile(root, game_dir, False, main)
             return
-        plan = None
-        try:
-            plan = window.run_waiting(root, lambda: core.inspect(game_dir), "Checking Sheikah Mods...") if main else core.inspect(game_dir)
-        except core.Cancelled:
-            raise
-        except core.Error as error:
-            if isinstance(error, core.Offline):
-                raise
-            _log("Couldn't check before launching; using installed mods. " + str(error), "warn")
-        if main and plan is not None:
-            root._sheikah_plan = plan
-            root._sheikah_issue = core.Offline('offline') if plan.offline else None
-            _show(root, plan, ui_state.offline_message(plan) if plan.offline else None)
-        if plan is not None and plan.offline and not ui_state.usable(plan):
-            raise core.Offline("Required mods do not match the saved list.")
-        if plan is not None and not plan.offline and plan.changes and not core.deferred(plan):
-            if not main:
-                raise core.Error("Open Sheikah Mods in the launcher to review the available changes first.")
-            if window.ask_updates(root, plan, launching=True):
-                plan = window.run_waiting(root, lambda emit: core.install(plan, progress=emit),
-                                          "Preparing Sheikah mods...", progress=lambda text: _set_progress(root, text))
-            else:
-                core.defer(plan)
-                _log("Updates skipped; launching with installed mods.", "warn")
-        _switch_profile(root, game_dir, True, main, plan.mods if plan is not None else None)
+        pack = None if id == packs.SHEIKAH_ID else next(item for item in packs.catalog(game_dir) if item.id == id)
+        plan = _prepare_pack(root, game_dir, main, pack)
+        _switch_profile(root, game_dir, pack is None, main, plan.mods if plan is not None else None, pack=pack)
     except Exception as error:
         message = str(error) if isinstance(error, core.Cancelled) else ui_state.friendly_error(error, getattr(root, '_sheikah_plan', None))
         if main:
@@ -388,7 +677,8 @@ def before_launch(args):
     finally:
         if root is not None:
             root._sheikah_launching = False
-            _render_next_status(root)
+            if main:
+                _destination_changed(root)
 
 
 class _Popen(subprocess.Popen):
@@ -406,7 +696,12 @@ if not getattr(subprocess.Popen, "_sheikah_mods", False):
 def _startup(root):
     game_dir = _game_dir(root)
     if game_dir is not None:
-        check(root, game_dir)
+        try:
+            prompt = len(packs.catalog(game_dir)) == 1
+        except core.Error as error:
+            _log(str(error), 'err')
+            return
+        check(root, game_dir, prompt=prompt)
 
 
 def _add_button(anchor):

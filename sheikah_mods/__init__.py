@@ -1,1 +1,1 @@
-"""Sheikah Mods: the dedicated Sheikah Sanctuary mod updater."""
+"""Sheikah Mods: client mod packs for TavernLauncher."""

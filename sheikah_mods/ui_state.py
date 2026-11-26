@@ -9,6 +9,8 @@ def usable(plan):
 def action(plan, busy=False, issue=None):
     if busy:
         return 'Working...', False
+    if plan is not None and plan.pinned:
+        return 'Updates paused', False
     if issue is not None or (plan is not None and plan.offline):
         return 'Retry', True
     if plan is None:

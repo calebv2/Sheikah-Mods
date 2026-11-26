@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from ui_support import client, core, dialog_style, sample_plan, window
+from ui_support import client, core, dialog_style, make_root, sample_plan, window
 
 ui_state = client.ui_state
 
@@ -94,9 +94,7 @@ class UsabilityWindowTests(unittest.TestCase):
         Path(self.game, 'Mods').mkdir()
         self.exe = Path(self.game, core.GAME_EXE)
         self.exe.write_bytes(b'test')
-        self.root = tk.Tk()
-        self.root.withdraw()
-        self.addCleanup(self.root.destroy)
+        make_root(self)
         style = dialog_style()
         style.__enter__()
         self.addCleanup(style.__exit__, None, None, None)
